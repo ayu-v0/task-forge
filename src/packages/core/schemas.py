@@ -41,6 +41,34 @@ class TaskBatchRead(TaskBatchCreate):
     )
 
 
+class TaskBatchTaskCreate(SchemaModel):
+    client_task_id: str
+    title: str
+    description: str | None = None
+    task_type: str
+    priority: TaskPriority = TaskPriority.MEDIUM
+    input_payload: dict[str, Any] = Field(default_factory=dict)
+    expected_output_schema: dict[str, Any] = Field(default_factory=dict)
+    dependency_client_task_ids: list[str] = Field(default_factory=list)
+
+
+class TaskBatchSubmitRequest(TaskBatchCreate):
+    tasks: list[TaskBatchTaskCreate] = Field(min_length=3, max_length=20)
+
+
+class TaskBatchSubmitTaskRead(SchemaModel):
+    task_id: str
+    client_task_id: str
+    title: str
+    status: TaskStatus
+    dependency_ids: list[str] = Field(default_factory=list)
+
+
+class TaskBatchSubmitResponse(SchemaModel):
+    batch_id: str
+    tasks: list[TaskBatchSubmitTaskRead]
+
+
 class TaskCreate(SchemaModel):
     batch_id: str
     title: str
