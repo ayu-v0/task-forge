@@ -3,10 +3,18 @@ from __future__ import annotations
 from collections import deque
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.apps.api.deps import get_db
-from src.packages.core.db.models import TaskBatchORM, TaskORM
+from src.packages.core.db.models import (
+    AgentRoleORM,
+    AssignmentORM,
+    ReviewCheckpointORM,
+    TaskBatchORM,
+    TaskORM,
+)
+from src.packages.router import route_task
 from src.packages.core.schemas import (
     TaskBatchRead,
     TaskBatchSubmitRequest,
@@ -85,6 +93,7 @@ def create_task_batch(
     _detect_cycle(payload)
 
     task_mapping: dict[str, TaskORM] = {}
+    routing_results: dict[str, dict[str, str | bool | None | list[str]]] = {}
 
     try:
         with db.begin():
@@ -124,6 +133,41 @@ def create_task_batch(
                     for dependency_id in submitted_task.dependency_client_task_ids
                 ]
 
+            agent_roles = db.scalars(select(AgentRoleORM)).all()
+
+            for submitted_task in payload.tasks:
+                task = task_mapping[submitted_task.client_task_id]
+                route_result = route_task(task, list(agent_roles))
+
+                if route_result.needs_review:
+                    task.status = "waiting_review"
+                    task.assigned_agent_role = None
+                    review_checkpoint = ReviewCheckpointORM(
+                        task_id=task.id,
+                        reason=route_result.routing_reason,
+                        review_status="pending",
+                    )
+                    db.add(review_checkpoint)
+                else:
+                    task.status = "assigned"
+                    task.assigned_agent_role = route_result.agent_role_name
+                    assignment = AssignmentORM(
+                        task_id=task.id,
+                        agent_role_id=route_result.agent_role_id,
+                        routing_reason=route_result.routing_reason,
+                        assignment_status="active",
+                    )
+                    db.add(assignment)
+
+                routing_results[submitted_task.client_task_id] = {
+                    "assigned_agent_role": route_result.agent_role_name,
+                    "routing_reason": route_result.routing_reason,
+                    "auto_execute": route_result.auto_execute,
+                    "needs_review": route_result.needs_review,
+                    "dependency_ids": task.dependency_ids,
+                    "status": task.status,
+                }
+
         return TaskBatchSubmitResponse(
             batch_id=task_batch.id,
             tasks=[
@@ -131,8 +175,12 @@ def create_task_batch(
                     task_id=task_mapping[submitted_task.client_task_id].id,
                     client_task_id=submitted_task.client_task_id,
                     title=submitted_task.title,
-                    status=task_mapping[submitted_task.client_task_id].status,
-                    dependency_ids=task_mapping[submitted_task.client_task_id].dependency_ids,
+                    status=routing_results[submitted_task.client_task_id]["status"],
+                    dependency_ids=routing_results[submitted_task.client_task_id]["dependency_ids"],
+                    assigned_agent_role=routing_results[submitted_task.client_task_id]["assigned_agent_role"],
+                    routing_reason=routing_results[submitted_task.client_task_id]["routing_reason"],
+                    auto_execute=routing_results[submitted_task.client_task_id]["auto_execute"],
+                    needs_review=routing_results[submitted_task.client_task_id]["needs_review"],
                 )
                 for submitted_task in payload.tasks
             ],

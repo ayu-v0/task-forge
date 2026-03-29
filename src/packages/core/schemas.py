@@ -62,6 +62,10 @@ class TaskBatchSubmitTaskRead(SchemaModel):
     title: str
     status: TaskStatus
     dependency_ids: list[str] = Field(default_factory=list)
+    assigned_agent_role: str | None = None
+    routing_reason: str | None = None
+    auto_execute: bool = False
+    needs_review: bool = False
 
 
 class TaskBatchSubmitResponse(SchemaModel):

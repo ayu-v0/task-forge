@@ -87,7 +87,8 @@ def test_submit_maximum_20_tasks() -> None:
     assert response.status_code == 201
     body = response.json()
     assert len(body["tasks"]) == 20
-    assert all(task["status"] == "pending" for task in body["tasks"])
+    assert all(task["status"] == "waiting_review" for task in body["tasks"])
+    assert all(task["needs_review"] is True for task in body["tasks"])
     batch_response = client.get(f"/task-batches/{body['batch_id']}")
     assert batch_response.status_code == 200
     batch_body = batch_response.json()
