@@ -93,6 +93,16 @@ class TaskRead(TaskCreate):
     updated_at: datetime
 
 
+class TaskEventRead(SchemaModel):
+    id: str
+    task_id: str
+    event_type: str
+    event_status: str | None = None
+    message: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
 class AgentRoleCreate(SchemaModel):
     role_name: str
     description: str | None = None

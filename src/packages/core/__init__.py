@@ -18,6 +18,7 @@ from .schemas import (
     TaskBatchCreate,
     TaskBatchRead,
     TaskCreate,
+    TaskEventRead,
     TaskRead,
 )
 
@@ -41,5 +42,6 @@ __all__ = [
     "TaskBatchCreate",
     "TaskBatchRead",
     "TaskCreate",
+    "TaskEventRead",
     "TaskRead",
 ]

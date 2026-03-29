@@ -19,6 +19,13 @@ if str(ROOT) not in sys.path:
 def _database_url() -> str:
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
+        env_file = ROOT / ".env"
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                if line.startswith("DATABASE_URL="):
+                    database_url = line.split("=", 1)[1].strip()
+                    break
+    if not database_url:
         raise RuntimeError("DATABASE_URL is not set")
     return database_url
 
@@ -87,7 +94,7 @@ def test_submit_maximum_20_tasks() -> None:
     assert response.status_code == 201
     body = response.json()
     assert len(body["tasks"]) == 20
-    assert all(task["status"] == "waiting_review" for task in body["tasks"])
+    assert all(task["status"] == "needs_review" for task in body["tasks"])
     assert all(task["needs_review"] is True for task in body["tasks"])
     batch_response = client.get(f"/task-batches/{body['batch_id']}")
     assert batch_response.status_code == 200
@@ -112,6 +119,30 @@ def test_submit_and_fetch_batch_with_dependencies() -> None:
     assert batch_body["id"] == body["batch_id"]
     assert batch_body["total_tasks"] == 3
     assert batch_body["metadata"]["suite"] == "extreme"
+
+
+def test_task_detail_and_events_are_queryable_after_submission() -> None:
+    response = client.post("/task-batches", json=_payload(task_count=3))
+
+    assert response.status_code == 201
+    created_task = response.json()["tasks"][0]
+
+    task_response = client.get(f"/tasks/{created_task['task_id']}")
+    assert task_response.status_code == 200
+    task_body = task_response.json()
+    assert task_body["id"] == created_task["task_id"]
+    assert task_body["status"] == "needs_review"
+    assert task_body["assigned_agent_role"] is None
+
+    event_response = client.get(f"/tasks/{created_task['task_id']}/events")
+    assert event_response.status_code == 200
+    events = event_response.json()
+    assert len(events) == 1
+    assert events[0]["event_type"] == "task_status_changed"
+    assert events[0]["event_status"] == "needs_review"
+    assert events[0]["payload"]["from_status"] == "pending"
+    assert events[0]["payload"]["to_status"] == "needs_review"
+    assert events[0]["payload"]["source"] == "router"
 
 
 def test_submit_rejects_duplicate_client_task_ids() -> None:

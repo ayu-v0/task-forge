@@ -14,13 +14,14 @@ from src.packages.core.db.models import (
     TaskBatchORM,
     TaskORM,
 )
-from src.packages.router import route_task
 from src.packages.core.schemas import (
     TaskBatchRead,
     TaskBatchSubmitRequest,
     TaskBatchSubmitResponse,
     TaskBatchSubmitTaskRead,
 )
+from src.packages.core.task_state_machine import transition_task_status
+from src.packages.router import route_task
 
 router = APIRouter(prefix="/task-batches", tags=["task-batches"])
 
@@ -140,8 +141,14 @@ def create_task_batch(
                 route_result = route_task(task, list(agent_roles))
 
                 if route_result.needs_review:
-                    task.status = "waiting_review"
                     task.assigned_agent_role = None
+                    transition_task_status(
+                        db,
+                        task,
+                        to_status="needs_review",
+                        reason=route_result.routing_reason,
+                        source="router",
+                    )
                     review_checkpoint = ReviewCheckpointORM(
                         task_id=task.id,
                         reason=route_result.routing_reason,
@@ -149,8 +156,14 @@ def create_task_batch(
                     )
                     db.add(review_checkpoint)
                 else:
-                    task.status = "assigned"
                     task.assigned_agent_role = route_result.agent_role_name
+                    transition_task_status(
+                        db,
+                        task,
+                        to_status="queued",
+                        reason=route_result.routing_reason,
+                        source="router",
+                    )
                     assignment = AssignmentORM(
                         task_id=task.id,
                         agent_role_id=route_result.agent_role_id,

@@ -19,6 +19,13 @@ if str(ROOT) not in sys.path:
 def _database_url() -> str:
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
+        env_file = ROOT / ".env"
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                if line.startswith("DATABASE_URL="):
+                    database_url = line.split("=", 1)[1].strip()
+                    break
+    if not database_url:
         raise RuntimeError("DATABASE_URL is not set")
     return database_url
 
@@ -145,7 +152,7 @@ def test_routes_tasks_by_exact_task_type() -> None:
     tasks = response.json()["tasks"]
     assert all(task["assigned_agent_role"] == role["role_name"] for task in tasks)
     assert all(task["routing_reason"] == "matched by task_type=generate" for task in tasks)
-    assert all(task["status"] == "assigned" for task in tasks)
+    assert all(task["status"] == "queued" for task in tasks)
 
 
 def test_routes_tasks_by_capability_when_task_type_not_declared() -> None:
@@ -192,7 +199,7 @@ def test_marks_tasks_waiting_review_when_no_role_matches() -> None:
     tasks = response.json()["tasks"]
     assert all(task["assigned_agent_role"] is None for task in tasks)
     assert all(task["needs_review"] is True for task in tasks)
-    assert all(task["status"] == "waiting_review" for task in tasks)
+    assert all(task["status"] == "needs_review" for task in tasks)
     assert all(task["routing_reason"] == "No eligible agent role found for task_type=no_match" for task in tasks)
 
     engine = create_engine(_database_url())
@@ -216,3 +223,26 @@ def test_marks_tasks_waiting_review_when_no_role_matches() -> None:
 
     assert review_count == 3
     assert assignment_count == 0
+
+
+def test_routing_writes_status_transition_events() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    _register_agent(
+        client,
+        role_name=f"{ROUTING_PREFIX}event-{suffix}",
+        capabilities=["task:generate"],
+        supported_task_types=["generate"],
+    )
+
+    response = client.post("/task-batches", json=_batch_payload("generate", suffix))
+
+    assert response.status_code == 201
+    task_id = response.json()["tasks"][0]["task_id"]
+
+    events_response = client.get(f"/tasks/{task_id}/events")
+    assert events_response.status_code == 200
+    events = events_response.json()
+    assert len(events) == 1
+    assert events[0]["event_status"] == "queued"
+    assert events[0]["payload"]["from_status"] == "pending"
+    assert events[0]["payload"]["to_status"] == "queued"

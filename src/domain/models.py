@@ -25,14 +25,13 @@ class TaskBatchStatus(str, Enum):
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
-    READY = "ready"
-    ASSIGNED = "assigned"
+    QUEUED = "queued"
     RUNNING = "running"
-    WAITING_REVIEW = "waiting_review"
-    COMPLETED = "completed"
+    BLOCKED = "blocked"
+    NEEDS_REVIEW = "needs_review"
+    SUCCESS = "success"
     FAILED = "failed"
     CANCELLED = "cancelled"
-    BLOCKED = "blocked"
 
 
 class TaskPriority(str, Enum):
