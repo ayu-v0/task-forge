@@ -1,6 +1,10 @@
 from .schemas import (
+    AgentCapabilityDeclaration,
     AgentRoleCreate,
+    AgentRoleDetailRead,
     AgentRoleRead,
+    AgentRoleRegisterRequest,
+    AgentRoleUpdateRequest,
     ArtifactCreate,
     ArtifactRead,
     AssignmentCreate,
@@ -18,8 +22,12 @@ from .schemas import (
 )
 
 __all__ = [
+    "AgentCapabilityDeclaration",
     "AgentRoleCreate",
+    "AgentRoleDetailRead",
     "AgentRoleRead",
+    "AgentRoleRegisterRequest",
+    "AgentRoleUpdateRequest",
     "ArtifactCreate",
     "ArtifactRead",
     "AssignmentCreate",

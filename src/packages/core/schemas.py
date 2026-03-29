@@ -105,6 +105,53 @@ class AgentRoleRead(AgentRoleCreate):
     id: str
 
 
+class AgentCapabilityDeclaration(SchemaModel):
+    supported_task_types: list[str] = Field(default_factory=list)
+    input_requirements: dict[str, Any] = Field(default_factory=dict)
+    output_contract: dict[str, Any] = Field(default_factory=dict)
+    supports_concurrency: bool = False
+    allows_auto_retry: bool = False
+
+
+class AgentRoleRegisterRequest(SchemaModel):
+    role_name: str
+    description: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    capability_declaration: AgentCapabilityDeclaration = Field(default_factory=AgentCapabilityDeclaration)
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
+    timeout_seconds: int = Field(gt=0, default=300)
+    max_retries: int = Field(ge=0, default=0)
+    enabled: bool = True
+    version: str = "1.0.0"
+
+
+class AgentRoleUpdateRequest(SchemaModel):
+    description: str | None = None
+    capabilities: list[str] | None = None
+    capability_declaration: AgentCapabilityDeclaration | None = None
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
+    timeout_seconds: int | None = Field(default=None, gt=0)
+    max_retries: int | None = Field(default=None, ge=0)
+    enabled: bool | None = None
+    version: str | None = None
+
+
+class AgentRoleDetailRead(SchemaModel):
+    id: str
+    role_name: str
+    description: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    capability_declaration: AgentCapabilityDeclaration
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
+    timeout_seconds: int
+    max_retries: int
+    enabled: bool
+    version: str
+
+
 class AssignmentCreate(SchemaModel):
     task_id: str
     agent_role_id: str
