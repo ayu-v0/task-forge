@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from src.domain.models import (
     AssignmentStatus,
@@ -35,6 +35,10 @@ class TaskBatchRead(TaskBatchCreate):
     created_at: datetime
     status: TaskBatchStatus
     total_tasks: int
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_json", "metadata"),
+    )
 
 
 class TaskCreate(SchemaModel):
