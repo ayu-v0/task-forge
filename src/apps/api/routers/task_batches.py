@@ -262,6 +262,8 @@ def create_task_batch(
                     )
                     db.add(review_checkpoint)
                     db.flush()
+                    # This is an additive domain event for review workflow observability.
+                    # The status transition event is still emitted by transition_task_status.
                     db.add(
                         EventLogORM(
                             batch_id=task.batch_id,

@@ -145,6 +145,22 @@ def test_task_detail_and_events_are_queryable_after_submission() -> None:
     assert status_event["payload"]["source"] == "router"
 
 
+def test_review_routed_submission_emits_status_and_checkpoint_events_only() -> None:
+    response = client.post("/task-batches", json=_payload(task_count=3))
+    assert response.status_code == 201
+
+    task_id = response.json()["tasks"][0]["task_id"]
+    event_response = client.get(f"/tasks/{task_id}/events")
+    assert event_response.status_code == 200
+
+    events = event_response.json()
+    assert len(events) == 2
+    assert [event["event_type"] for event in events] == [
+        "task_status_changed",
+        "review_checkpoint_created",
+    ]
+
+
 def test_submit_rejects_duplicate_client_task_ids() -> None:
     payload = _payload()
     payload["tasks"][1]["client_task_id"] = payload["tasks"][0]["client_task_id"]
