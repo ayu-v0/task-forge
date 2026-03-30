@@ -53,7 +53,7 @@ class AssignmentStatus(str, Enum):
 class ExecutionRunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
-    SUCCEEDED = "succeeded"
+    SUCCESS = "success"
     FAILED = "failed"
     TIMED_OUT = "timed_out"
     CANCELLED = "cancelled"

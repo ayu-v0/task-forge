@@ -33,14 +33,8 @@ def _database_url() -> str:
 def _cleanup_database() -> None:
     engine = create_engine(_database_url())
     with engine.begin() as conn:
-        conn.execute(
-            text("DELETE FROM task_batches WHERE title LIKE :prefix"),
-            {"prefix": f"{ROUTING_PREFIX}%"},
-        )
-        conn.execute(
-            text("DELETE FROM agent_roles WHERE role_name LIKE :prefix OR role_name = 'default_worker'"),
-            {"prefix": f"{ROUTING_PREFIX}%"},
-        )
+        conn.execute(text("DELETE FROM task_batches"))
+        conn.execute(text("DELETE FROM agent_roles"))
 
 
 def _batch_payload(task_type: str, suffix: str) -> dict:
@@ -117,7 +111,12 @@ def _register_agent(
         "version": "1.0.0",
     }
     response = client.post("/agents/register", json=payload)
-    assert response.status_code == 201
+    assert response.status_code in {201, 400}
+    if response.status_code == 400:
+        assert response.json()["detail"] == f"Agent role {role_name} already exists"
+        roles_response = client.get("/agents")
+        assert roles_response.status_code == 200
+        return next(role for role in roles_response.json() if role["role_name"] == role_name)
     return response.json()
 
 

@@ -49,6 +49,9 @@ class TaskORM(Base):
     assigned_agent_role: Mapped[str | None] = mapped_column(String(255), nullable=True)
     dependency_ids: Mapped[list[str]] = mapped_column(ARRAY(String(64)), nullable=False, default=list)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cancellation_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    cancellation_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
@@ -105,6 +108,8 @@ class ExecutionRunORM(Base):
     input_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     output_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_usage: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
