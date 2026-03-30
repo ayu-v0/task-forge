@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from src.apps.worker.builtin_agents import EchoWorkerAgent, FailingWorkerAgent, WorkerAgent
+from src.apps.worker.builtin_agents import (
+    DefaultWorkerAgent,
+    EchoWorkerAgent,
+    FailingWorkerAgent,
+    PlannerWorkerAgent,
+    ReviewerWorkerAgent,
+    WorkerAgent,
+)
 
 
 def get_worker_agent(role_name: str) -> WorkerAgent:
@@ -8,6 +15,9 @@ def get_worker_agent(role_name: str) -> WorkerAgent:
         "default_worker": EchoWorkerAgent(),
         "echo_worker": EchoWorkerAgent(),
         "failing_worker": FailingWorkerAgent(),
+        "planner_agent": PlannerWorkerAgent(),
+        "worker_agent": DefaultWorkerAgent(),
+        "reviewer_agent": ReviewerWorkerAgent(),
     }
 
     if role_name not in agents:
