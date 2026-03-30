@@ -13,7 +13,7 @@ TASK_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "queued": {"running", "cancelled", "blocked"},
     "running": {"success", "failed", "needs_review", "cancelled"},
     "blocked": {"queued", "cancelled"},
-    "needs_review": {"queued", "cancelled"},
+    "needs_review": {"queued", "blocked", "failed", "cancelled"},
     "failed": {"queued"},
     "success": set(),
     "cancelled": set(),

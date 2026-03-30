@@ -215,6 +215,17 @@ class ReviewCheckpointRead(ReviewCheckpointCreate):
     resolved_at: datetime | None = None
 
 
+class ReviewDecisionApproveRequest(SchemaModel):
+    reviewer: str = Field(min_length=1)
+    review_comment: str | None = None
+    agent_role_id: str = Field(min_length=1)
+
+
+class ReviewDecisionRejectRequest(SchemaModel):
+    reviewer: str = Field(min_length=1)
+    review_comment: str = Field(min_length=1)
+
+
 class ArtifactCreate(SchemaModel):
     task_id: str | None = None
     run_id: str | None = None

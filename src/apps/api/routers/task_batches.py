@@ -10,6 +10,7 @@ from src.apps.api.deps import get_db
 from src.packages.core.db.models import (
     AgentRoleORM,
     AssignmentORM,
+    EventLogORM,
     ReviewCheckpointORM,
     TaskBatchORM,
     TaskORM,
@@ -155,6 +156,22 @@ def create_task_batch(
                         review_status="pending",
                     )
                     db.add(review_checkpoint)
+                    db.flush()
+                    db.add(
+                        EventLogORM(
+                            batch_id=task.batch_id,
+                            task_id=task.id,
+                            event_type="review_checkpoint_created",
+                            event_status="needs_review",
+                            message=route_result.routing_reason,
+                            payload={
+                                "task_id": task.id,
+                                "review_id": review_checkpoint.id,
+                                "reason": route_result.routing_reason,
+                                "source": "router",
+                            },
+                        )
+                    )
                 else:
                     task.assigned_agent_role = route_result.agent_role_name
                     assignment = AssignmentORM(
