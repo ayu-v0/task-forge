@@ -224,7 +224,7 @@ def test_cancel_running_task_marks_request_and_finishes_cancelled() -> None:
 
     response = client.post("/task-batches", json=_batch_payload(role_name, suffix))
     assert response.status_code == 201
-    task_id = response.json()["tasks"][0]["task_id"]
+    task_ids = [task["task_id"] for task in response.json()["tasks"]]
 
     registry = AgentRegistry()
     registry.register(role_name, CancellableSlowAgent())
@@ -242,15 +242,20 @@ def test_cancel_running_task_marks_request_and_finishes_cancelled() -> None:
     thread.start()
 
     deadline = time.time() + 5
+    running_task_id: str | None = None
     while time.time() < deadline:
-        task_response = client.get(f"/tasks/{task_id}")
-        if task_response.status_code == 200 and task_response.json()["status"] == "running":
+        for task_id in task_ids:
+            task_response = client.get(f"/tasks/{task_id}")
+            if task_response.status_code == 200 and task_response.json()["status"] == "running":
+                running_task_id = task_id
+                break
+        if running_task_id is not None:
             break
         time.sleep(0.05)
     else:
         raise AssertionError("task never entered running state")
 
-    cancel_response = client.post(f"/tasks/{task_id}/cancel", json={"reason": "user stop"})
+    cancel_response = client.post(f"/tasks/{running_task_id}/cancel", json={"reason": "user stop"})
     assert cancel_response.status_code == 200
     assert cancel_response.json()["cancellation_requested"] is True
 
@@ -258,19 +263,19 @@ def test_cancel_running_task_marks_request_and_finishes_cancelled() -> None:
     assert not thread.is_alive()
     assert not errors
 
-    final_task = client.get(f"/tasks/{task_id}")
+    final_task = client.get(f"/tasks/{running_task_id}")
     assert final_task.status_code == 200
     final_payload = final_task.json()
     assert final_payload["status"] == "cancelled"
     assert final_payload["cancellation_requested"] is True
 
-    runs = client.get(f"/tasks/{task_id}/runs")
+    runs = client.get(f"/tasks/{running_task_id}/runs")
     assert runs.status_code == 200
     run_payload = runs.json()[0]
     assert run_payload["run_status"] == "cancelled"
     assert run_payload["cancel_reason"] == "user stop"
 
-    events = client.get(f"/tasks/{task_id}/events")
+    events = client.get(f"/tasks/{running_task_id}/events")
     assert events.status_code == 200
     event_types = [item["event_type"] for item in events.json()]
     assert "task_cancellation_requested" in event_types

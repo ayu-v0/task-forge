@@ -180,20 +180,21 @@ def test_worker_executes_queued_task_to_success() -> None:
     with Session(engine) as session:
         run = run_next_task(session, build_default_registry())
         assert run is not None
+        executed_task_id = run.task_id
 
-    task_response = client.get(f"/tasks/{task_id}")
+    task_response = client.get(f"/tasks/{executed_task_id}")
     assert task_response.status_code == 200
     assert task_response.json()["status"] == "success"
 
-    runs_response = client.get(f"/tasks/{task_id}/runs")
+    runs_response = client.get(f"/tasks/{executed_task_id}/runs")
     assert runs_response.status_code == 200
     runs = runs_response.json()
     assert len(runs) == 1
     assert runs[0]["run_status"] == "success"
     assert runs[0]["output_snapshot"]["status"] == "ok"
-    assert runs[0]["output_snapshot"]["task_id"] == task_id
+    assert runs[0]["output_snapshot"]["task_id"] == executed_task_id
 
-    events_response = client.get(f"/tasks/{task_id}/events")
+    events_response = client.get(f"/tasks/{executed_task_id}/events")
     assert events_response.status_code == 200
     statuses = [
         event["event_status"]
@@ -258,12 +259,13 @@ def test_get_run_returns_saved_execution_run() -> None:
         run = run_next_task(session, build_default_registry())
         assert run is not None
         run_id = run.id
+        executed_task_id = run.task_id
 
     run_response = client.get(f"/runs/{run_id}")
     assert run_response.status_code == 200
     payload = run_response.json()
     assert payload["id"] == run_id
-    assert payload["task_id"] == task_id
+    assert payload["task_id"] == executed_task_id
     assert payload["run_status"] == "success"
 
 

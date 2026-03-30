@@ -22,3 +22,6 @@ class WorkerContext:
 class AgentRunner(Protocol):
     def run(self, task: TaskORM, context: WorkerContext) -> dict:
         ...
+
+    def execute(self, task: TaskORM, context: WorkerContext) -> dict:
+        ...

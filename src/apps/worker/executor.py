@@ -101,6 +101,18 @@ def is_task_cancellation_requested(db: Session, task_id: str) -> bool:
     return bool(task and task.cancellation_requested)
 
 
+def _execute_agent(agent: object, task: TaskORM, context: WorkerContext) -> dict:
+    execute = getattr(agent, "execute", None)
+    if callable(execute):
+        return execute(task, context)
+
+    run = getattr(agent, "run", None)
+    if callable(run):
+        return run(task, context)
+
+    raise RuntimeError("Agent runner must provide execute(task, context) or run(task, context)")
+
+
 def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM] | None:
     with db.begin():
         task = None
@@ -392,7 +404,7 @@ def execute_task(
             started_at=started_at,
             cancellation_check=lambda: is_task_cancellation_requested(db, task.id),
         )
-        result = agent.run(task, context)
+        result = _execute_agent(agent, task, context)
         if is_task_cancellation_requested(db, task.id):
             raise TaskCancelledError("task cancellation requested during execution")
         latency_ms = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000))
