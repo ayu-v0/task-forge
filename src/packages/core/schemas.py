@@ -89,6 +89,9 @@ class TaskRead(TaskCreate):
     id: str
     status: TaskStatus
     retry_count: int
+    cancellation_requested: bool = False
+    cancellation_requested_at: datetime | None = None
+    cancellation_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -188,6 +191,8 @@ class ExecutionRunCreate(SchemaModel):
     input_snapshot: dict[str, Any] = Field(default_factory=dict)
     output_snapshot: dict[str, Any] = Field(default_factory=dict)
     error_message: str | None = None
+    cancelled_at: datetime | None = None
+    cancel_reason: str | None = None
     token_usage: dict[str, int] = Field(default_factory=dict)
     latency_ms: int | None = Field(default=None, ge=0)
 
@@ -237,3 +242,7 @@ class EventLogCreate(SchemaModel):
 class EventLogRead(EventLogCreate):
     id: str
     created_at: datetime
+
+
+class TaskCancelRequest(SchemaModel):
+    reason: str = Field(min_length=1)

@@ -41,7 +41,7 @@ def _cleanup_database() -> None:
             {"prefix": f"{TEST_PREFIX}%"},
         )
         conn.execute(
-            text("DELETE FROM agent_roles WHERE role_name LIKE :prefix OR role_name = 'default_worker'"),
+            text("DELETE FROM agent_roles WHERE role_name LIKE :prefix"),
             {"prefix": f"{TEST_PREFIX}%"},
         )
 
@@ -118,7 +118,10 @@ def _register_agent(
         "version": "1.0.0",
     }
     response = client.post("/agents/register", json=payload)
-    assert response.status_code == 201
+    assert response.status_code in {201, 400}
+    if response.status_code == 400:
+        assert response.json()["detail"] == f"Agent role {role_name} already exists"
+        return {"role_name": role_name}
     return response.json()
 
 

@@ -12,6 +12,10 @@ from src.packages.core.db.models import AgentRoleORM, AssignmentORM, EventLogORM
 from src.packages.core.task_state_machine import transition_task_status
 
 
+class TaskCancelledError(Exception):
+    pass
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -91,6 +95,12 @@ def unlock_dependent_tasks(db: Session, completed_task_id: str) -> list[str]:
     return unlocked_task_ids
 
 
+def is_task_cancellation_requested(db: Session, task_id: str) -> bool:
+    db.expire_all()
+    task = db.get(TaskORM, task_id)
+    return bool(task and task.cancellation_requested)
+
+
 def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM] | None:
     with db.begin():
         task = None
@@ -99,6 +109,7 @@ def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM
             .where(
                 TaskORM.status == "queued",
                 TaskORM.assigned_agent_role.is_not(None),
+                TaskORM.cancellation_requested.is_(False),
             )
             .order_by(_priority_ordering(), TaskORM.created_at.asc())
             .with_for_update(skip_locked=True)
@@ -189,46 +200,114 @@ def mark_run_success(
     result: dict,
     latency_ms: int,
 ) -> ExecutionRunORM:
-    with db.begin():
-        task = db.get(TaskORM, task_id)
-        run = db.get(ExecutionRunORM, run_id)
-        if task is None or run is None:
-            raise ValueError("Task or run not found")
+    if not db.in_transaction():
+        with db.begin():
+            return mark_run_success(db, task_id, run_id, result, latency_ms)
 
-        run.run_status = "success"
-        run.finished_at = _now()
-        run.output_snapshot = result
-        run.latency_ms = latency_ms
-        run.logs = [*run.logs, "execution finished"]
+    task = db.get(TaskORM, task_id)
+    run = db.get(ExecutionRunORM, run_id)
+    if task is None or run is None:
+        raise ValueError("Task or run not found")
+    if task.cancellation_requested:
+        return mark_run_cancelled(db, task_id, run_id, task.cancellation_reason or "task cancellation requested")
 
-        transition_task_status(
-            db,
-            task,
-            to_status="success",
-            reason="worker finished task successfully",
-            source="worker",
+    run.run_status = "success"
+    run.finished_at = _now()
+    run.output_snapshot = result
+    run.latency_ms = latency_ms
+    run.logs = [*run.logs, "execution finished"]
+
+    transition_task_status(
+        db,
+        task,
+        to_status="success",
+        reason="worker finished task successfully",
+        source="worker",
+        run_id=run.id,
+    )
+    db.add(
+        EventLogORM(
+            batch_id=task.batch_id,
+            task_id=task.id,
             run_id=run.id,
+            event_type="execution_run_finished",
+            event_status="success",
+            message="worker completed execution run",
+            payload={"task_id": task.id, "run_id": run.id},
         )
-        db.add(
-            EventLogORM(
-                batch_id=task.batch_id,
-                task_id=task.id,
-                run_id=run.id,
-                event_type="execution_run_finished",
-                event_status="success",
-                message="worker completed execution run",
-                payload={"task_id": task.id, "run_id": run.id},
-            )
+    )
+    unlocked_task_ids = unlock_dependent_tasks(db, task.id)
+    if unlocked_task_ids:
+        run.logs = [
+            *run.logs,
+            f"unlocked dependent tasks: {', '.join(unlocked_task_ids)}",
+        ]
+    db.flush()
+    db.refresh(run)
+    return run
+
+
+def mark_run_cancelled(
+    db: Session,
+    task_id: str,
+    run_id: str,
+    reason: str,
+) -> ExecutionRunORM:
+    if not db.in_transaction():
+        with db.begin():
+            return mark_run_cancelled(db, task_id, run_id, reason)
+
+    task = db.get(TaskORM, task_id)
+    run = db.get(ExecutionRunORM, run_id)
+    if task is None or run is None:
+        raise ValueError("Task or run not found")
+
+    now = _now()
+    run.run_status = "cancelled"
+    run.finished_at = now
+    run.cancelled_at = now
+    run.cancel_reason = reason
+    run.logs = [*run.logs, "cancellation requested", "execution cancelled"]
+
+    transition_task_status(
+        db,
+        task,
+        to_status="cancelled",
+        reason=reason,
+        source="worker",
+        run_id=run.id,
+    )
+    db.add(
+        EventLogORM(
+            batch_id=task.batch_id,
+            task_id=task.id,
+            run_id=run.id,
+            event_type="execution_run_cancelled",
+            event_status="cancelled",
+            message=reason,
+            payload={"task_id": task.id, "run_id": run.id, "reason": reason},
         )
-        unlocked_task_ids = unlock_dependent_tasks(db, task.id)
-        if unlocked_task_ids:
-            run.logs = [
-                *run.logs,
-                f"unlocked dependent tasks: {', '.join(unlocked_task_ids)}",
-            ]
-        db.flush()
-        db.refresh(run)
-        return run
+    )
+    db.add(
+        EventLogORM(
+            batch_id=task.batch_id,
+            task_id=task.id,
+            run_id=run.id,
+            event_type="task_cancellation_completed",
+            event_status="cancelled",
+            message=reason,
+            payload={
+                "task_id": task.id,
+                "run_id": run.id,
+                "reason": reason,
+                "completed_at": _now().isoformat(),
+                "source": "worker",
+            },
+        )
+    )
+    db.flush()
+    db.refresh(run)
+    return run
 
 
 def mark_run_failed(
@@ -238,41 +317,44 @@ def mark_run_failed(
     exc: Exception,
     latency_ms: int,
 ) -> ExecutionRunORM:
-    with db.begin():
-        task = db.get(TaskORM, task_id)
-        run = db.get(ExecutionRunORM, run_id)
-        if task is None or run is None:
-            raise ValueError("Task or run not found")
+    if not db.in_transaction():
+        with db.begin():
+            return mark_run_failed(db, task_id, run_id, exc, latency_ms)
 
-        error_lines = [line.rstrip() for line in format_exception(exc) if line.strip()]
-        run.run_status = "failed"
-        run.finished_at = _now()
-        run.error_message = str(exc)
-        run.latency_ms = latency_ms
-        run.logs = [*run.logs, f"execution failed: {exc}", *error_lines]
+    task = db.get(TaskORM, task_id)
+    run = db.get(ExecutionRunORM, run_id)
+    if task is None or run is None:
+        raise ValueError("Task or run not found")
 
-        transition_task_status(
-            db,
-            task,
-            to_status="failed",
-            reason="worker execution failed",
-            source="worker",
+    error_lines = [line.rstrip() for line in format_exception(exc) if line.strip()]
+    run.run_status = "failed"
+    run.finished_at = _now()
+    run.error_message = str(exc)
+    run.latency_ms = latency_ms
+    run.logs = [*run.logs, f"execution failed: {exc}", *error_lines]
+
+    transition_task_status(
+        db,
+        task,
+        to_status="failed",
+        reason="worker execution failed",
+        source="worker",
+        run_id=run.id,
+    )
+    db.add(
+        EventLogORM(
+            batch_id=task.batch_id,
+            task_id=task.id,
             run_id=run.id,
+            event_type="execution_run_finished",
+            event_status="failed",
+            message="worker execution failed",
+            payload={"task_id": task.id, "run_id": run.id, "error_message": str(exc)},
         )
-        db.add(
-            EventLogORM(
-                batch_id=task.batch_id,
-                task_id=task.id,
-                run_id=run.id,
-                event_type="execution_run_finished",
-                event_status="failed",
-                message="worker execution failed",
-                payload={"task_id": task.id, "run_id": run.id, "error_message": str(exc)},
-            )
-        )
-        db.flush()
-        db.refresh(run)
-        return run
+    )
+    db.flush()
+    db.refresh(run)
+    return run
 
 
 def execute_task(
@@ -300,18 +382,46 @@ def execute_task(
                 f"agent loaded: {agent_role.role_name}",
                 "execution started",
             ]
+            if is_task_cancellation_requested(db, task.id):
+                raise TaskCancelledError("task cancellation requested before execution started")
 
         context = WorkerContext(
             run_id=run.id,
             task_id=task.id,
             agent_role_name=agent_role.role_name,
             started_at=started_at,
+            cancellation_check=lambda: is_task_cancellation_requested(db, task.id),
         )
         result = agent.run(task, context)
+        if is_task_cancellation_requested(db, task.id):
+            raise TaskCancelledError("task cancellation requested during execution")
         latency_ms = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000))
+        if db.in_transaction():
+            db.rollback()
         return mark_run_success(db, task.id, run.id, result, latency_ms)
+    except TaskCancelledError as exc:
+        if db.in_transaction():
+            db.rollback()
+        return mark_run_cancelled(db, task.id, run.id, str(exc))
     except Exception as exc:
+        if is_task_cancellation_requested(db, task.id):
+            current_task = db.get(TaskORM, task.id)
+            reason = (
+                current_task.cancellation_reason
+                if current_task and current_task.cancellation_reason
+                else "task cancellation requested during execution"
+            )
+            if db.in_transaction():
+                db.rollback()
+            return mark_run_cancelled(
+                db,
+                task.id,
+                run.id,
+                reason,
+            )
         latency_ms = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000))
+        if db.in_transaction():
+            db.rollback()
         return mark_run_failed(db, task.id, run.id, exc, latency_ms)
 
 

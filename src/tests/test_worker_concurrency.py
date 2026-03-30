@@ -39,9 +39,6 @@ def _cleanup_database() -> None:
             text("DELETE FROM task_batches WHERE title LIKE :prefix"),
             {"prefix": f"{TEST_PREFIX}%"},
         )
-        conn.execute(
-            text("DELETE FROM agent_roles WHERE role_name = 'default_worker'"),
-        )
 
 
 _cleanup_database()
@@ -83,7 +80,9 @@ def _register_default_worker() -> None:
         "version": "1.0.0",
     }
     response = client.post("/agents/register", json=payload)
-    assert response.status_code == 201
+    assert response.status_code in {201, 400}
+    if response.status_code == 400:
+        assert response.json()["detail"] == "Agent role default_worker already exists"
 
 
 def setup_function() -> None:
