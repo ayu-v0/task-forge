@@ -73,6 +73,56 @@ class TaskBatchSubmitResponse(SchemaModel):
     tasks: list[TaskBatchSubmitTaskRead]
 
 
+class BatchCountsRead(SchemaModel):
+    pending_count: int = 0
+    queued_count: int = 0
+    running_count: int = 0
+    blocked_count: int = 0
+    needs_review_count: int = 0
+    success_count: int = 0
+    failed_count: int = 0
+    cancelled_count: int = 0
+
+
+class BatchProgressRead(SchemaModel):
+    completed_count: int
+    total_tasks: int
+    progress_percent: float
+
+
+class BatchTaskResultRead(SchemaModel):
+    task_id: str
+    title: str
+    task_type: str
+    status: TaskStatus
+    assigned_agent_role: str | None = None
+    latest_run_id: str | None = None
+    latest_run_status: ExecutionRunStatus | None = None
+    output_snapshot: dict[str, Any] = Field(default_factory=dict)
+    error_message: str | None = None
+    cancel_reason: str | None = None
+    artifact_count: int = 0
+
+
+class BatchArtifactRead(SchemaModel):
+    artifact_id: str
+    task_id: str | None = None
+    run_id: str | None = None
+    artifact_type: str
+    uri: str
+    content_type: str | None = None
+    created_at: datetime
+
+
+class TaskBatchSummaryRead(SchemaModel):
+    batch: TaskBatchRead
+    derived_status: str
+    counts: BatchCountsRead
+    progress: BatchProgressRead
+    tasks: list[BatchTaskResultRead]
+    artifacts: list[BatchArtifactRead]
+
+
 class TaskCreate(SchemaModel):
     batch_id: str
     title: str

@@ -10,13 +10,20 @@ from src.apps.api.deps import get_db
 from src.packages.core.db.models import (
     AgentRoleORM,
     AssignmentORM,
+    ArtifactORM,
     EventLogORM,
+    ExecutionRunORM,
     ReviewCheckpointORM,
     TaskBatchORM,
     TaskORM,
 )
 from src.packages.core.schemas import (
+    BatchArtifactRead,
+    BatchCountsRead,
+    BatchProgressRead,
+    BatchTaskResultRead,
     TaskBatchRead,
+    TaskBatchSummaryRead,
     TaskBatchSubmitRequest,
     TaskBatchSubmitResponse,
     TaskBatchSubmitTaskRead,
@@ -25,6 +32,104 @@ from src.packages.core.task_state_machine import transition_task_status
 from src.packages.router import route_task
 
 router = APIRouter(prefix="/task-batches", tags=["task-batches"])
+
+
+def _build_batch_counts(tasks: list[TaskORM]) -> BatchCountsRead:
+    counts = {
+        "pending_count": 0,
+        "queued_count": 0,
+        "running_count": 0,
+        "blocked_count": 0,
+        "needs_review_count": 0,
+        "success_count": 0,
+        "failed_count": 0,
+        "cancelled_count": 0,
+    }
+    status_to_field = {
+        "pending": "pending_count",
+        "queued": "queued_count",
+        "running": "running_count",
+        "blocked": "blocked_count",
+        "needs_review": "needs_review_count",
+        "success": "success_count",
+        "failed": "failed_count",
+        "cancelled": "cancelled_count",
+    }
+    for task in tasks:
+        field_name = status_to_field.get(task.status)
+        if field_name is not None:
+            counts[field_name] += 1
+    return BatchCountsRead(**counts)
+
+
+def _build_batch_progress(tasks: list[TaskORM]) -> BatchProgressRead:
+    total_tasks = len(tasks)
+    completed_count = sum(1 for task in tasks if task.status in {"success", "failed", "cancelled"})
+    progress_percent = 0.0 if total_tasks == 0 else round((completed_count / total_tasks) * 100, 2)
+    return BatchProgressRead(
+        completed_count=completed_count,
+        total_tasks=total_tasks,
+        progress_percent=progress_percent,
+    )
+
+
+def _derive_batch_status(tasks: list[TaskORM]) -> str:
+    if not tasks:
+        return "pending"
+
+    statuses = [task.status for task in tasks]
+    unique_statuses = set(statuses)
+
+    if unique_statuses == {"cancelled"}:
+        return "cancelled"
+    if "running" in unique_statuses:
+        return "running"
+    if "needs_review" in unique_statuses:
+        return "needs_review"
+    if unique_statuses & {"queued", "blocked", "pending"}:
+        return "pending"
+    if unique_statuses == {"success"}:
+        return "success"
+    if unique_statuses == {"failed"}:
+        return "failed"
+    if "success" in unique_statuses and "failed" in unique_statuses:
+        return "partially_failed"
+    if "cancelled" in unique_statuses:
+        return "partially_failed"
+    return "pending"
+
+
+def _load_latest_runs(task_ids: list[str], db: Session) -> dict[str, ExecutionRunORM]:
+    if not task_ids:
+        return {}
+
+    runs = db.scalars(
+        select(ExecutionRunORM)
+        .where(ExecutionRunORM.task_id.in_(task_ids))
+        .order_by(ExecutionRunORM.started_at.desc(), ExecutionRunORM.id.desc())
+    ).all()
+
+    latest_runs: dict[str, ExecutionRunORM] = {}
+    for run in runs:
+        latest_runs.setdefault(run.task_id, run)
+    return latest_runs
+
+
+def _load_batch_artifacts(task_ids: list[str], db: Session) -> tuple[list[ArtifactORM], dict[str, int]]:
+    if not task_ids:
+        return [], {}
+
+    artifacts = db.scalars(
+        select(ArtifactORM)
+        .where(ArtifactORM.task_id.in_(task_ids))
+        .order_by(ArtifactORM.created_at.asc(), ArtifactORM.id.asc())
+    ).all()
+
+    artifact_counts: dict[str, int] = {}
+    for artifact in artifacts:
+        if artifact.task_id is not None:
+            artifact_counts[artifact.task_id] = artifact_counts.get(artifact.task_id, 0) + 1
+    return artifacts, artifact_counts
 
 
 def _validate_unique_client_task_ids(payload: TaskBatchSubmitRequest) -> None:
@@ -238,3 +343,61 @@ def get_task_batch(batch_id: str, db: Session = Depends(get_db)) -> TaskBatchRea
     if task_batch is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task batch not found")
     return TaskBatchRead.model_validate(task_batch)
+
+
+@router.get("/{batch_id}/summary", response_model=TaskBatchSummaryRead)
+def get_task_batch_summary(batch_id: str, db: Session = Depends(get_db)) -> TaskBatchSummaryRead:
+    task_batch = db.get(TaskBatchORM, batch_id)
+    if task_batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task batch not found")
+
+    tasks = db.scalars(
+        select(TaskORM)
+        .where(TaskORM.batch_id == batch_id)
+        .order_by(TaskORM.created_at.asc(), TaskORM.id.asc())
+    ).all()
+    task_ids = [task.id for task in tasks]
+    latest_runs = _load_latest_runs(task_ids, db)
+    artifacts, artifact_counts = _load_batch_artifacts(task_ids, db)
+    counts = _build_batch_counts(tasks)
+    progress = _build_batch_progress(tasks)
+    derived_status = _derive_batch_status(tasks)
+
+    task_results = [
+        BatchTaskResultRead(
+            task_id=task.id,
+            title=task.title,
+            task_type=task.task_type,
+            status=task.status,
+            assigned_agent_role=task.assigned_agent_role,
+            latest_run_id=latest_runs.get(task.id).id if latest_runs.get(task.id) is not None else None,
+            latest_run_status=latest_runs.get(task.id).run_status if latest_runs.get(task.id) is not None else None,
+            output_snapshot=latest_runs.get(task.id).output_snapshot if latest_runs.get(task.id) is not None else {},
+            error_message=latest_runs.get(task.id).error_message if latest_runs.get(task.id) is not None else None,
+            cancel_reason=latest_runs.get(task.id).cancel_reason if latest_runs.get(task.id) is not None else None,
+            artifact_count=artifact_counts.get(task.id, 0),
+        )
+        for task in tasks
+    ]
+
+    artifact_reads = [
+        BatchArtifactRead(
+            artifact_id=artifact.id,
+            task_id=artifact.task_id,
+            run_id=artifact.run_id,
+            artifact_type=artifact.artifact_type,
+            uri=artifact.uri,
+            content_type=artifact.content_type,
+            created_at=artifact.created_at,
+        )
+        for artifact in artifacts
+    ]
+
+    return TaskBatchSummaryRead(
+        batch=TaskBatchRead.model_validate(task_batch),
+        derived_status=derived_status,
+        counts=counts,
+        progress=progress,
+        tasks=task_results,
+        artifacts=artifact_reads,
+    )

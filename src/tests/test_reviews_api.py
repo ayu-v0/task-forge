@@ -27,14 +27,8 @@ def _database_url() -> str:
 def _cleanup_database() -> None:
     engine = create_engine(_database_url())
     with engine.begin() as conn:
-        conn.execute(
-            text("DELETE FROM task_batches WHERE title LIKE :prefix"),
-            {"prefix": f"{TEST_PREFIX}%"},
-        )
-        conn.execute(
-            text("DELETE FROM agent_roles WHERE role_name LIKE :prefix"),
-            {"prefix": f"{TEST_PREFIX}%"},
-        )
+        conn.execute(text("DELETE FROM task_batches"))
+        conn.execute(text("DELETE FROM agent_roles"))
 
 
 def _register_agent(client: TestClient, *, role_name: str, supported_task_types: list[str]) -> dict:
