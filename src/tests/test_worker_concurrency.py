@@ -48,11 +48,19 @@ _cleanup_database()
 
 from src.apps.api.app import app  # noqa: E402
 from src.apps.worker.executor import run_next_task  # noqa: E402
-from src.apps.worker.registry import build_default_registry  # noqa: E402
-from src.packages.core.db.models import ExecutionRunORM  # noqa: E402
+from src.apps.worker.registry import AgentRegistry  # noqa: E402
+from src.packages.core.db.models import ExecutionRunORM, TaskORM  # noqa: E402
 
 
 client = TestClient(app)
+
+
+class SlowAgent:
+    def run(self, task: TaskORM, context) -> dict:
+        import time
+
+        time.sleep(0.2)
+        return {"status": "ok", "task_id": task.id}
 
 
 def _register_default_worker() -> None:
@@ -87,6 +95,7 @@ def teardown_function() -> None:
 
 
 def test_concurrent_workers_do_not_consume_same_task_twice() -> None:
+    role_name = "default_worker"
     _register_default_worker()
     suffix = uuid.uuid4().hex[:8]
     payload = {
@@ -120,7 +129,7 @@ def test_concurrent_workers_do_not_consume_same_task_twice() -> None:
                 "priority": "medium",
                 "input_payload": {"text": "!"},
                 "expected_output_schema": {"type": "object"},
-                "dependency_client_task_ids": ["task_1", "task_2"],
+                "dependency_client_task_ids": ["task_1"],
             },
         ],
     }
@@ -131,11 +140,13 @@ def test_concurrent_workers_do_not_consume_same_task_twice() -> None:
     engine = create_engine(_database_url())
     barrier = threading.Barrier(2)
     results: list[str | None] = [None, None]
+    registry = AgentRegistry()
+    registry.register(role_name, SlowAgent())
 
     def _run_once(index: int) -> None:
         with Session(engine) as session:
             barrier.wait()
-            run = run_next_task(session, build_default_registry())
+            run = run_next_task(session, registry)
             results[index] = None if run is None else run.task_id
 
     threads = [threading.Thread(target=_run_once, args=(index,)) for index in range(2)]

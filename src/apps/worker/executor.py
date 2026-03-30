@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from traceback import format_exception
 
 from sqlalchemy import case, func, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from src.apps.worker.registry import AgentRegistry
 from src.apps.worker.types import WorkerContext
@@ -38,32 +38,90 @@ def _dependencies_satisfied(task: TaskORM, db: Session) -> bool:
     return satisfied_count == len(task.dependency_ids)
 
 
+def unlock_dependent_tasks(db: Session, completed_task_id: str) -> list[str]:
+    blocked_tasks = db.scalars(
+        select(TaskORM)
+        .where(TaskORM.status == "blocked")
+        .order_by(TaskORM.created_at.asc())
+    ).all()
+
+    unlocked_task_ids: list[str] = []
+    for blocked_task in blocked_tasks:
+        if completed_task_id not in blocked_task.dependency_ids:
+            continue
+        if not blocked_task.assigned_agent_role:
+            continue
+        if not _dependencies_satisfied(blocked_task, db):
+            continue
+
+        assignment = db.scalars(
+            select(AssignmentORM)
+            .where(
+                AssignmentORM.task_id == blocked_task.id,
+                AssignmentORM.assignment_status == "active",
+            )
+            .order_by(AssignmentORM.assigned_at.desc())
+        ).first()
+        if assignment is None:
+            continue
+
+        transition_task_status(
+            db,
+            blocked_task,
+            to_status="queued",
+            reason=f"dependencies satisfied after task {completed_task_id} succeeded",
+            source="worker",
+        )
+        db.add(
+            EventLogORM(
+                batch_id=blocked_task.batch_id,
+                task_id=blocked_task.id,
+                event_type="task_unblocked",
+                event_status="queued",
+                message="task dependencies satisfied and task entered execution queue",
+                payload={
+                    "task_id": blocked_task.id,
+                    "completed_dependency_id": completed_task_id,
+                    "assignment_id": assignment.id,
+                },
+            )
+        )
+        unlocked_task_ids.append(blocked_task.id)
+
+    return unlocked_task_ids
+
+
 def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM] | None:
     with db.begin():
-        task = db.scalars(
+        task = None
+        queued_tasks = db.scalars(
             select(TaskORM)
-            .where(TaskORM.status == "queued")
+            .where(
+                TaskORM.status == "queued",
+                TaskORM.assigned_agent_role.is_not(None),
+            )
             .order_by(_priority_ordering(), TaskORM.created_at.asc())
             .with_for_update(skip_locked=True)
-        ).first()
+        ).all()
 
-        while task is not None:
-            if task.assigned_agent_role and _dependencies_satisfied(task, db):
+        for candidate in queued_tasks:
+            if _dependencies_satisfied(candidate, db):
+                task = candidate
                 break
 
-            task = db.scalars(
-                select(TaskORM)
-                .where(TaskORM.status == "queued", TaskORM.id != task.id)
-                .order_by(_priority_ordering(), TaskORM.created_at.asc())
-                .with_for_update(skip_locked=True)
-            ).first()
+            transition_task_status(
+                db,
+                candidate,
+                to_status="blocked",
+                reason="worker re-blocked task because dependencies are not yet satisfied",
+                source="worker",
+            )
 
         if task is None:
             return None
 
         assignment = db.scalars(
             select(AssignmentORM)
-            .options(joinedload(AssignmentORM.agent_role))
             .where(
                 AssignmentORM.task_id == task.id,
                 AssignmentORM.assignment_status == "active",
@@ -74,7 +132,9 @@ def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM
         if assignment is None:
             return None
 
-        agent_role = assignment.agent_role
+        agent_role = db.get(AgentRoleORM, assignment.agent_role_id)
+        if agent_role is None:
+            return None
         run = ExecutionRunORM(
             task_id=task.id,
             agent_role_id=assignment.agent_role_id,
@@ -160,6 +220,12 @@ def mark_run_success(
                 payload={"task_id": task.id, "run_id": run.id},
             )
         )
+        unlocked_task_ids = unlock_dependent_tasks(db, task.id)
+        if unlocked_task_ids:
+            run.logs = [
+                *run.logs,
+                f"unlocked dependent tasks: {', '.join(unlocked_task_ids)}",
+            ]
         db.flush()
         db.refresh(run)
         return run

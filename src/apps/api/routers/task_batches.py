@@ -157,13 +157,6 @@ def create_task_batch(
                     db.add(review_checkpoint)
                 else:
                     task.assigned_agent_role = route_result.agent_role_name
-                    transition_task_status(
-                        db,
-                        task,
-                        to_status="queued",
-                        reason=route_result.routing_reason,
-                        source="router",
-                    )
                     assignment = AssignmentORM(
                         task_id=task.id,
                         agent_role_id=route_result.agent_role_id,
@@ -171,6 +164,23 @@ def create_task_batch(
                         assignment_status="active",
                     )
                     db.add(assignment)
+
+                    if task.dependency_ids:
+                        transition_task_status(
+                            db,
+                            task,
+                            to_status="blocked",
+                            reason="waiting for dependency tasks to complete",
+                            source="router",
+                        )
+                    else:
+                        transition_task_status(
+                            db,
+                            task,
+                            to_status="queued",
+                            reason=route_result.routing_reason,
+                            source="router",
+                        )
 
                 routing_results[submitted_task.client_task_id] = {
                     "assigned_agent_role": route_result.agent_role_name,

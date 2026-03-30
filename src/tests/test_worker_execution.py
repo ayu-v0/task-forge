@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -124,8 +126,9 @@ _cleanup_database()
 
 from src.apps.api.app import app  # noqa: E402
 from src.apps.worker.executor import run_next_task  # noqa: E402
+from src.apps.worker.loop import run_worker_loop  # noqa: E402
 from src.apps.worker.registry import AgentRegistry, build_default_registry  # noqa: E402
-from src.packages.core.db.models import EventLogORM, ExecutionRunORM, TaskORM  # noqa: E402
+from src.packages.core.db.models import ExecutionRunORM, TaskORM  # noqa: E402
 
 
 client = TestClient(app)
@@ -134,6 +137,24 @@ client = TestClient(app)
 class FailingAgent:
     def run(self, task: TaskORM, context) -> dict:
         raise RuntimeError(f"intentional failure for {task.id}")
+
+
+class SlowAgent:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def run(self, task: TaskORM, context) -> dict:
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.2)
+            return {"status": "ok", "task_id": task.id}
+        finally:
+            with self._lock:
+                self.active -= 1
 
 
 def setup_function() -> None:
@@ -177,7 +198,11 @@ def test_worker_executes_queued_task_to_success() -> None:
 
     events_response = client.get(f"/tasks/{task_id}/events")
     assert events_response.status_code == 200
-    statuses = [event["event_status"] for event in events_response.json()]
+    statuses = [
+        event["event_status"]
+        for event in events_response.json()
+        if event["event_type"] == "task_status_changed"
+    ]
     assert statuses == ["queued", "running", "success"]
 
 
@@ -294,27 +319,127 @@ def test_worker_does_not_run_task_with_unsatisfied_dependency() -> None:
     assert response.status_code == 201
     tasks = response.json()["tasks"]
     task_ids = [task["task_id"] for task in tasks]
+    assert tasks[0]["status"] == "queued"
+    assert tasks[1]["status"] == "blocked"
+    assert tasks[2]["status"] == "queued"
 
     engine = create_engine(_database_url())
-    with engine.begin() as conn:
-        second_task_id = tasks[1]["task_id"]
-        conn.execute(
-            text("UPDATE tasks SET status = 'queued' WHERE id = :task_id"),
-            {"task_id": second_task_id},
-        )
 
     with Session(engine) as session:
         first_run = run_next_task(session, build_default_registry())
-        second_run = run_next_task(session, build_default_registry())
         assert first_run is not None
-        assert second_run is not None
 
     with Session(engine) as session:
         persisted_tasks = session.query(TaskORM).filter(TaskORM.id.in_(task_ids)).all()
         status_by_id = {task.id: task.status for task in persisted_tasks}
         assert status_by_id[task_ids[0]] == "success"
         assert status_by_id[task_ids[1]] == "queued"
-        assert status_by_id[task_ids[2]] == "success"
+        assert status_by_id[task_ids[2]] == "queued"
 
         run_task_ids = session.query(ExecutionRunORM.task_id).all()
-        assert sorted(task_id for (task_id,) in run_task_ids) == sorted([task_ids[0], task_ids[2]])
+        assert [task_id for (task_id,) in run_task_ids] == [task_ids[0]]
+
+
+def test_worker_unlocks_blocked_task_after_dependency_success() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    _register_agent(
+        client,
+        role_name="default_worker",
+        capabilities=["default_worker"],
+        supported_task_types=[],
+        declare_schema=False,
+    )
+
+    payload = {
+        "title": f"{TEST_PREFIX}unlock-batch-{suffix}",
+        "description": "unlock batch",
+        "created_by": "pytest",
+        "metadata": {"suite": "worker-unlock"},
+        "tasks": [
+            {
+                "client_task_id": "task_1",
+                "title": f"{TEST_PREFIX}unlock-{suffix}-1",
+                "task_type": "generate",
+                "priority": "medium",
+                "input_payload": {"text": "a"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+            {
+                "client_task_id": "task_2",
+                "title": f"{TEST_PREFIX}unlock-{suffix}-2",
+                "task_type": "generate",
+                "priority": "medium",
+                "input_payload": {"text": "b"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": ["task_1"],
+            },
+            {
+                "client_task_id": "task_3",
+                "title": f"{TEST_PREFIX}unlock-{suffix}-3",
+                "task_type": "generate",
+                "priority": "medium",
+                "input_payload": {"text": "c"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+        ],
+    }
+    response = client.post("/task-batches", json=payload)
+    assert response.status_code == 201
+    tasks = response.json()["tasks"]
+    dependent_task_id = tasks[1]["task_id"]
+    assert tasks[1]["status"] == "blocked"
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        first_run = run_next_task(session, build_default_registry())
+        assert first_run is not None
+
+    task_response = client.get(f"/tasks/{dependent_task_id}")
+    assert task_response.status_code == 200
+    assert task_response.json()["status"] == "queued"
+
+    events_response = client.get(f"/tasks/{dependent_task_id}/events")
+    assert events_response.status_code == 200
+    statuses = [
+        event["event_status"]
+        for event in events_response.json()
+        if event["event_type"] == "task_status_changed"
+    ]
+    assert statuses == ["blocked", "queued"]
+
+
+def test_worker_loop_runs_tasks_in_parallel_with_configured_limit() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role_name = f"{TEST_PREFIX}slow-{suffix}"
+    _register_agent(
+        client,
+        role_name=role_name,
+        capabilities=[f"task:{role_name}"],
+        supported_task_types=[role_name],
+    )
+
+    response = client.post("/task-batches", json=_batch_payload(role_name, suffix))
+    assert response.status_code == 201
+    task_ids = [task["task_id"] for task in response.json()["tasks"]]
+
+    slow_agent = SlowAgent()
+    registry = AgentRegistry()
+    registry.register(role_name, slow_agent)
+
+    engine = create_engine(_database_url())
+    processed = run_worker_loop(
+        lambda: Session(engine),
+        registry,
+        max_concurrency=2,
+        poll_interval_seconds=0.01,
+        max_iterations=50,
+    )
+
+    assert processed == 3
+    assert slow_agent.max_active == 2
+
+    with Session(engine) as session:
+        tasks = session.query(TaskORM).filter(TaskORM.id.in_(task_ids)).all()
+        assert all(task.status == "success" for task in tasks)

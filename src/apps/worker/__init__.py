@@ -1,6 +1,7 @@
 from src.apps.worker.executor import claim_next_task, execute_task, run_next_task
 from src.apps.worker.loop import run_worker_loop
 from src.apps.worker.registry import AgentRegistry, DefaultWorkerAgent, build_default_registry
+from src.apps.worker.settings import settings
 from src.apps.worker.types import AgentRunner, WorkerContext
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "execute_task",
     "run_next_task",
     "run_worker_loop",
+    "settings",
 ]
