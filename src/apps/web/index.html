@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Batch Console</title>
+  <link rel="stylesheet" href="/console/assets/styles.css">
+</head>
+<body>
+  <main class="page-shell">
+    <section class="hero">
+      <p class="eyebrow">Operations Console</p>
+      <h1>Batch Console</h1>
+      <p class="subtitle">Inspect task batches, isolate unhealthy runs, and track overall throughput.</p>
+    </section>
+
+    <section class="toolbar">
+      <label class="field">
+        <span>Search</span>
+        <input id="search-input" type="search" placeholder="Find batch by title">
+      </label>
+      <label class="field">
+        <span>Status</span>
+        <select id="status-select">
+          <option value="">All statuses</option>
+          <option value="pending">Pending</option>
+          <option value="running">Running</option>
+          <option value="needs_review">Needs review</option>
+          <option value="success">Success</option>
+          <option value="failed">Failed</option>
+          <option value="cancelled">Cancelled</option>
+          <option value="partially_failed">Partially failed</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Sort</span>
+        <select id="sort-select">
+          <option value="created_at_desc">Newest created</option>
+          <option value="created_at_asc">Oldest created</option>
+          <option value="updated_at_desc">Recently updated</option>
+          <option value="updated_at_asc">Least recently updated</option>
+        </select>
+      </label>
+      <button id="refresh-button" class="refresh-button" type="button">Refresh</button>
+    </section>
+
+    <section class="status-row">
+      <p id="status-text">Loading batches...</p>
+    </section>
+
+    <section id="batch-grid" class="batch-grid" aria-live="polite"></section>
+  </main>
+
+  <script src="/console/assets/app.js"></script>
+</body>
+</html>
