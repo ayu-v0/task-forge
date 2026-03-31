@@ -33,10 +33,8 @@ def _database_url() -> str:
 def _cleanup_database() -> None:
     engine = create_engine(_database_url())
     with engine.begin() as conn:
-        conn.execute(
-            text("DELETE FROM task_batches WHERE title LIKE :prefix"),
-            {"prefix": f"{TEST_TITLE_PREFIX}%"},
-        )
+        conn.execute(text("DELETE FROM task_batches"))
+        conn.execute(text("DELETE FROM agent_roles"))
 
 
 def _payload(task_count: int = 3) -> dict:
@@ -137,12 +135,30 @@ def test_task_detail_and_events_are_queryable_after_submission() -> None:
     event_response = client.get(f"/tasks/{created_task['task_id']}/events")
     assert event_response.status_code == 200
     events = event_response.json()
-    assert len(events) == 1
-    assert events[0]["event_type"] == "task_status_changed"
-    assert events[0]["event_status"] == "needs_review"
-    assert events[0]["payload"]["from_status"] == "pending"
-    assert events[0]["payload"]["to_status"] == "needs_review"
-    assert events[0]["payload"]["source"] == "router"
+    event_types = [event["event_type"] for event in events]
+    assert "task_status_changed" in event_types
+    assert "review_checkpoint_created" in event_types
+    status_event = next(event for event in events if event["event_type"] == "task_status_changed")
+    assert status_event["event_status"] == "needs_review"
+    assert status_event["payload"]["from_status"] == "pending"
+    assert status_event["payload"]["to_status"] == "needs_review"
+    assert status_event["payload"]["source"] == "router"
+
+
+def test_review_routed_submission_emits_status_and_checkpoint_events_only() -> None:
+    response = client.post("/task-batches", json=_payload(task_count=3))
+    assert response.status_code == 201
+
+    task_id = response.json()["tasks"][0]["task_id"]
+    event_response = client.get(f"/tasks/{task_id}/events")
+    assert event_response.status_code == 200
+
+    events = event_response.json()
+    assert len(events) == 2
+    assert [event["event_type"] for event in events] == [
+        "task_status_changed",
+        "review_checkpoint_created",
+    ]
 
 
 def test_submit_rejects_duplicate_client_task_ids() -> None:

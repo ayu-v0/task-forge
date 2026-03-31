@@ -13,7 +13,7 @@ TASK_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "queued": {"running", "cancelled", "blocked"},
     "running": {"success", "failed", "needs_review", "cancelled"},
     "blocked": {"queued", "cancelled"},
-    "needs_review": {"queued", "cancelled"},
+    "needs_review": {"queued", "blocked", "failed", "cancelled"},
     "failed": {"queued"},
     "success": set(),
     "cancelled": set(),
@@ -36,6 +36,8 @@ def transition_task_status(
     source: str,
     run_id: str | None = None,
 ) -> TaskORM:
+    # Every valid task status transition emits a canonical task_status_changed event.
+    # Domain-specific events (for example review checkpoint lifecycle events) are additive.
     from_status = task.status
     if not is_valid_task_transition(from_status, to_status):
         raise TaskStatusTransitionError(

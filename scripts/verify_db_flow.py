@@ -74,7 +74,7 @@ def main() -> None:
         run = ExecutionRunORM(
             task_id=task.id,
             agent_role_id=role.id,
-            run_status="succeeded",
+            run_status="success",
             started_at=utcnow(),
             finished_at=utcnow(),
             logs=["verification run"],
