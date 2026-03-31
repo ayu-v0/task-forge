@@ -123,6 +123,7 @@ def _register_agent(
 _cleanup_database()
 
 from src.apps.api.app import app  # noqa: E402
+from src.apps.api.bootstrap import ensure_builtin_agent_roles  # noqa: E402
 
 
 client = TestClient(app)
@@ -130,6 +131,7 @@ client = TestClient(app)
 
 def setup_function() -> None:
     _cleanup_database()
+    ensure_builtin_agent_roles()
 
 
 def teardown_function() -> None:
@@ -169,6 +171,22 @@ def test_routes_tasks_by_capability_when_task_type_not_declared() -> None:
     tasks = response.json()["tasks"]
     assert all(task["assigned_agent_role"] == role["role_name"] for task in tasks)
     assert all(task["routing_reason"] == "matched by capability=task:write_summary" for task in tasks)
+
+
+def test_routes_builtin_search_and_code_roles_by_capability() -> None:
+    suffix = uuid.uuid4().hex[:8]
+
+    search_response = client.post("/task-batches", json=_batch_payload("research_topic", f"{suffix}-search"))
+    assert search_response.status_code == 201
+    search_tasks = search_response.json()["tasks"]
+    assert all(task["assigned_agent_role"] == "search_agent" for task in search_tasks)
+    assert all(task["routing_reason"] == "matched by capability=task:research_topic" for task in search_tasks)
+
+    code_response = client.post("/task-batches", json=_batch_payload("implement_feature", f"{suffix}-code"))
+    assert code_response.status_code == 201
+    code_tasks = code_response.json()["tasks"]
+    assert all(task["assigned_agent_role"] == "code_agent" for task in code_tasks)
+    assert all(task["routing_reason"] == "matched by capability=task:implement_feature" for task in code_tasks)
 
 
 def test_routes_tasks_to_default_worker_as_fallback() -> None:
