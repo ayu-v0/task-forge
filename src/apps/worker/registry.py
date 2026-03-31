@@ -4,6 +4,15 @@ from src.apps.worker.types import AgentRunner, WorkerContext
 from src.packages.sdk.base_agent import BaseAgent
 from src.packages.core.db.models import TaskORM
 
+from src.apps.worker.builtin_agents import (
+    DefaultWorkerAgent as BuiltinDefaultWorkerAgent,
+    EchoWorkerAgent,
+    FailingWorkerAgent,
+    PlannerWorkerAgent,
+    ReviewerWorkerAgent,
+    WorkerAgent,
+)
+
 
 class DefaultWorkerAgent(BaseAgent):
     role_name = "default_worker"
@@ -39,3 +48,19 @@ def build_default_registry() -> AgentRegistry:
     registry = AgentRegistry()
     registry.register("default_worker", DefaultWorkerAgent())
     return registry
+
+
+def get_worker_agent(role_name: str) -> WorkerAgent:
+    agents: dict[str, WorkerAgent] = {
+        "default_worker": EchoWorkerAgent(),
+        "echo_worker": EchoWorkerAgent(),
+        "failing_worker": FailingWorkerAgent(),
+        "planner_agent": PlannerWorkerAgent(),
+        "worker_agent": BuiltinDefaultWorkerAgent(),
+        "reviewer_agent": ReviewerWorkerAgent(),
+    }
+
+    if role_name not in agents:
+        raise KeyError(f"No worker agent registered for role {role_name}")
+
+    return agents[role_name]
