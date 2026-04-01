@@ -22,6 +22,10 @@ function formatPercent(value) {
   return `${value}%`;
 }
 
+function formatCurrency(value) {
+  return `$${Number(value ?? 0).toFixed(6)}`;
+}
+
 function formatJson(value) {
   const entries = value && typeof value === "object" ? Object.keys(value) : [];
   if (!entries.length) {
@@ -125,6 +129,18 @@ function renderAgents(items) {
             <div><dt>Total runs</dt><dd>${escapeHtml(item.total_runs)}</dd></div>
             <div><dt>Success runs</dt><dd>${escapeHtml(item.success_runs)}</dd></div>
             <div><dt>Success rate</dt><dd>${escapeHtml(formatPercent(item.success_rate))}</dd></div>
+          </dl>
+
+          <dl class="metrics compact">
+            <div><dt>Avg latency</dt><dd>${escapeHtml(item.average_latency_ms ?? "n/a")} ms</dd></div>
+            <div><dt>Retry rate</dt><dd>${escapeHtml(formatPercent(item.retry_rate))}</dd></div>
+            <div><dt>Total tokens</dt><dd>${escapeHtml(item.total_tokens)}</dd></div>
+          </dl>
+
+          <dl class="metrics compact">
+            <div><dt>Avg total tokens</dt><dd>${escapeHtml(item.average_total_tokens)}</dd></div>
+            <div><dt>Avg cost estimate</dt><dd>${escapeHtml(formatCurrency(item.average_cost_estimate))}</dd></div>
+            <div><dt>Total cost estimate</dt><dd>${escapeHtml(formatCurrency(item.total_cost_estimate))}</dd></div>
           </dl>
 
           <section class="detail-block">

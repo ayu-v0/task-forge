@@ -101,7 +101,7 @@ def _batch_payload(task_type: str, suffix: str) -> dict:
 _cleanup_database()
 
 from src.apps.api.app import app  # noqa: E402
-from src.packages.core.db.models import AssignmentORM, ExecutionRunORM, TaskORM  # noqa: E402
+from src.packages.core.db.models import AssignmentORM, ExecutionRunORM, ReviewCheckpointORM, TaskORM  # noqa: E402
 
 
 client = TestClient(app)
@@ -152,6 +152,7 @@ def test_batch_detail_page_assets_include_batch_timeline() -> None:
     asset_response = client.get("/console/assets/batch-detail.js")
     assert asset_response.status_code == 200
     assert "/task-batches/${batchId}/timeline" in asset_response.text
+    assert "Error category" in asset_response.text
 
 
 def test_batch_detail_summary_supports_mixed_risk_sections() -> None:
@@ -188,6 +189,13 @@ def test_batch_detail_summary_supports_mixed_risk_sections() -> None:
                 output_snapshot={"step": "compile"},
             )
         )
+        session.add(
+            ReviewCheckpointORM(
+                task_id=third_task.id,
+                reason="No eligible agent role found for task_type=unmatched_type",
+                review_status="pending",
+            )
+        )
         session.commit()
 
     summary_response = client.get(f"/task-batches/{batch_id}/summary")
@@ -203,5 +211,13 @@ def test_batch_detail_summary_supports_mixed_risk_sections() -> None:
     review_task = next(item for item in payload["tasks"] if item["task_id"] == task_ids[2])
 
     assert failed_task["error_message"] == "detail page should highlight this failure"
+    assert failed_task["error_category"] == "execution_error"
     assert blocked_task["dependency_ids"] == [task_ids[0]]
+    assert blocked_task["error_category"] == "dependency_blocked"
     assert review_task["status"] == "needs_review"
+    assert review_task["error_category"] == "routing_error"
+    assert {item["category"] for item in payload["failure_categories"]} == {
+        "execution_error",
+        "dependency_blocked",
+        "routing_error",
+    }

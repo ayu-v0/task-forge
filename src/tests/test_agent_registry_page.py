@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from src.packages.core.db.models import ExecutionRunORM
+
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_ROLE_PREFIX = "registry-test-role-"
@@ -124,49 +126,23 @@ def _create_batch_with_task(client: TestClient, *, task_type: str, suffix: str) 
 def _insert_runs(task_id: str, agent_role_id: str, run_statuses: list[str]) -> None:
     engine = create_engine(_database_url())
     with Session(engine) as session:
-        for run_status in run_statuses:
-            session.execute(
-                text(
-                    """
-                    INSERT INTO execution_runs (
-                        id,
-                        task_id,
-                        agent_role_id,
-                        run_status,
-                        started_at,
-                        finished_at,
-                        logs,
-                        input_snapshot,
-                        output_snapshot,
-                        error_message,
-                        cancelled_at,
-                        cancel_reason,
-                        token_usage,
-                        latency_ms
-                    ) VALUES (
-                        :id,
-                        :task_id,
-                        :agent_role_id,
-                        :run_status,
-                        NOW(),
-                        NOW(),
-                        ARRAY[]::text[],
-                        '{}'::jsonb,
-                        '{}'::jsonb,
-                        NULL,
-                        NULL,
-                        NULL,
-                        '{}'::jsonb,
-                        100
-                    )
-                    """
-                ),
-                {
-                    "id": f"run_{uuid.uuid4().hex}",
-                    "task_id": task_id,
-                    "agent_role_id": agent_role_id,
-                    "run_status": run_status,
-                },
+        for index, run_status in enumerate(run_statuses, start=1):
+            session.add(
+                ExecutionRunORM(
+                    id=f"run_{uuid.uuid4().hex}",
+                    task_id=task_id,
+                    agent_role_id=agent_role_id,
+                    run_status=run_status,
+                    logs=[],
+                    input_snapshot={},
+                    output_snapshot={},
+                    token_usage=(
+                        {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+                        if index == 1
+                        else {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}
+                    ),
+                    latency_ms=100 * index,
+                )
             )
         session.commit()
 
@@ -264,51 +240,9 @@ def _seed_registry_history(*, suffix: str, run_statuses: list[str]) -> dict:
                 "assigned_agent_role": role_name,
             },
         )
-        for run_status in run_statuses:
-            session.execute(
-                text(
-                    """
-                    INSERT INTO execution_runs (
-                        id,
-                        task_id,
-                        agent_role_id,
-                        run_status,
-                        started_at,
-                        finished_at,
-                        logs,
-                        input_snapshot,
-                        output_snapshot,
-                        error_message,
-                        cancelled_at,
-                        cancel_reason,
-                        token_usage,
-                        latency_ms
-                    ) VALUES (
-                        :id,
-                        :task_id,
-                        :agent_role_id,
-                        :run_status,
-                        NOW(),
-                        NOW(),
-                        ARRAY[]::text[],
-                        '{}'::jsonb,
-                        '{}'::jsonb,
-                        NULL,
-                        NULL,
-                        NULL,
-                        '{}'::jsonb,
-                        100
-                    )
-                    """
-                ),
-                {
-                    "id": f"run_{uuid.uuid4().hex}",
-                    "task_id": task_id,
-                    "agent_role_id": role_id,
-                    "run_status": run_status,
-                },
-            )
         session.commit()
+
+    _insert_runs(task_id, role_id, run_statuses)
 
     return role
 
@@ -342,6 +276,12 @@ def test_agent_registry_aggregates_run_history_and_success_rate() -> None:
     assert registry_item["total_runs"] == 3
     assert registry_item["success_runs"] == 1
     assert registry_item["success_rate"] == 33.33
+    assert registry_item["average_latency_ms"] == 200.0
+    assert registry_item["retry_rate"] == 100.0
+    assert registry_item["total_tokens"] == 75
+    assert registry_item["average_total_tokens"] == 25.0
+    assert registry_item["total_cost_estimate"] == 0.0001
+    assert registry_item["average_cost_estimate"] == 0.000033
 
 
 def test_agent_registry_diagnosis_distinguishes_enabled_disabled_and_missing_matches() -> None:
@@ -395,6 +335,9 @@ def test_agent_registry_reports_no_run_history_when_role_has_no_runs() -> None:
     assert registry_item["total_runs"] == 0
     assert registry_item["success_runs"] == 0
     assert registry_item["success_rate"] is None
+    assert registry_item["average_latency_ms"] is None
+    assert registry_item["retry_rate"] is None
+    assert registry_item["total_cost_estimate"] == 0
 
 
 def test_console_agent_registry_page_is_accessible() -> None:
@@ -408,5 +351,8 @@ def test_agent_registry_assets_include_success_rate_and_diagnosis_copy() -> None
     response = client.get("/console/assets/agents.js")
     assert response.status_code == 200
     assert "Success rate" in response.text
+    assert "Avg latency" in response.text
+    assert "Retry rate" in response.text
+    assert "Total cost estimate" in response.text
     assert "Why no suitable role?" in client.get("/console/agents").text
     assert "No run history" in response.text

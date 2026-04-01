@@ -173,6 +173,9 @@ def test_summary_returns_needs_review_status_for_unrouted_batch() -> None:
     assert payload["derived_status"] == "needs_review"
     assert payload["counts"]["needs_review_count"] == 3
     assert payload["progress"]["completed_count"] == 0
+    assert all(task["error_category"] == "routing_error" for task in payload["tasks"])
+    assert payload["failure_categories"][0]["category"] == "routing_error"
+    assert payload["failure_categories"][0]["count"] == 3
 
 
 def test_summary_returns_running_status_when_task_is_in_progress() -> None:
@@ -275,4 +278,66 @@ def test_summary_aggregates_latest_run_and_artifacts() -> None:
     assert task_summary["latest_run_status"] == "success"
     assert task_summary["output_snapshot"] == {"version": 2}
     assert task_summary["artifact_count"] == 1
+    assert task_summary["error_category"] is None
     assert len(payload["artifacts"]) == 1
+
+
+def test_summary_groups_failure_categories_from_latest_task_context() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    _register_agent(client, role_name="default_worker", supported_task_types=[])
+    response = client.post("/task-batches", json=_batch_payload("unmatched_type", suffix))
+    assert response.status_code == 201
+    batch_id = response.json()["batch_id"]
+    task_ids = [task["task_id"] for task in response.json()["tasks"]]
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        tasks = [session.get(TaskORM, task_id) for task_id in task_ids]
+        assert all(task is not None for task in tasks)
+        first_task, second_task, third_task = tasks
+        first_assignment = session.query(AssignmentORM).filter(AssignmentORM.task_id == first_task.id).first()
+        third_assignment = session.query(AssignmentORM).filter(AssignmentORM.task_id == third_task.id).first()
+        assert first_assignment is not None
+        assert third_assignment is not None
+
+        first_task.status = "failed"
+        second_task.status = "blocked"
+        third_task.status = "failed"
+
+        session.add(
+            ExecutionRunORM(
+                task_id=first_task.id,
+                agent_role_id=first_assignment.agent_role_id,
+                run_status="failed",
+                error_message="input_payload.text must be a non-empty string",
+                logs=["validation failed"],
+                output_snapshot={},
+            )
+        )
+        session.add(
+            ExecutionRunORM(
+                task_id=third_task.id,
+                agent_role_id=third_assignment.agent_role_id,
+                run_status="failed",
+                error_message="command failed with exit code 1",
+                logs=["subprocess call failed"],
+                output_snapshot={},
+            )
+        )
+        session.commit()
+
+    summary_response = client.get(f"/task-batches/{batch_id}/summary")
+    assert summary_response.status_code == 200
+    payload = summary_response.json()
+
+    validation_task = next(item for item in payload["tasks"] if item["task_id"] == task_ids[0])
+    blocked_task = next(item for item in payload["tasks"] if item["task_id"] == task_ids[1])
+    tool_task = next(item for item in payload["tasks"] if item["task_id"] == task_ids[2])
+    assert validation_task["error_category"] == "validation_error"
+    assert blocked_task["error_category"] == "dependency_blocked"
+    assert tool_task["error_category"] == "external_tool_error"
+
+    category_counts = {item["category"]: item["count"] for item in payload["failure_categories"]}
+    assert category_counts["validation_error"] == 1
+    assert category_counts["dependency_blocked"] == 1
+    assert category_counts["external_tool_error"] == 1

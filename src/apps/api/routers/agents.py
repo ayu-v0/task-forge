@@ -3,11 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import case, func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.apps.api.deps import get_db
 from src.packages.core.db.models import AgentRoleORM, ExecutionRunORM
+from src.packages.core.costs import estimate_cost
 from src.packages.core.schemas import (
     AgentCapabilityDeclaration,
     AgentRoleDetailRead,
@@ -50,9 +51,10 @@ def _to_agent_detail(agent_role: AgentRoleORM) -> AgentRoleDetailRead:
 def _to_agent_registry_item(
     agent_role: AgentRoleORM,
     *,
-    total_runs: int,
-    success_runs: int,
+    stats: dict[str, Any],
 ) -> AgentRegistryListItemRead:
+    total_runs = int(stats.get("total_runs", 0))
+    success_runs = int(stats.get("success_runs", 0))
     success_rate = None
     if total_runs > 0:
         success_rate = round((success_runs / total_runs) * 100, 2)
@@ -70,6 +72,16 @@ def _to_agent_registry_item(
         total_runs=total_runs,
         success_runs=success_runs,
         success_rate=success_rate,
+        average_latency_ms=stats.get("average_latency_ms"),
+        retry_rate=stats.get("retry_rate"),
+        average_prompt_tokens=stats.get("average_prompt_tokens", 0),
+        average_completion_tokens=stats.get("average_completion_tokens", 0),
+        average_total_tokens=stats.get("average_total_tokens", 0),
+        total_prompt_tokens=stats.get("total_prompt_tokens", 0),
+        total_completion_tokens=stats.get("total_completion_tokens", 0),
+        total_tokens=stats.get("total_tokens", 0),
+        average_cost_estimate=stats.get("average_cost_estimate", 0),
+        total_cost_estimate=stats.get("total_cost_estimate", 0),
     )
 
 
@@ -182,31 +194,64 @@ def get_agent_registry(
 ) -> AgentRegistryResponse:
     agent_roles = db.scalars(select(AgentRoleORM).order_by(AgentRoleORM.role_name)).all()
 
-    run_stats_rows = db.execute(
-        select(
-            ExecutionRunORM.agent_role_id,
-            func.count(ExecutionRunORM.id).label("total_runs"),
-            func.coalesce(
-                func.sum(case((ExecutionRunORM.run_status == "success", 1), else_=0)),
-                0,
-            ).label("success_runs"),
-        )
-        .group_by(ExecutionRunORM.agent_role_id)
-    ).all()
+    runs = db.scalars(select(ExecutionRunORM).order_by(ExecutionRunORM.started_at.asc(), ExecutionRunORM.id.asc())).all()
+    run_stats_by_role_id: dict[str, dict[str, Any]] = {}
+    task_run_counts: dict[str, int] = {}
+    for run in runs:
+        task_run_counts[run.task_id] = task_run_counts.get(run.task_id, 0) + 1
 
-    run_stats_by_role_id: dict[str, dict[str, Any]] = {
-        row.agent_role_id: {
-            "total_runs": int(row.total_runs or 0),
-            "success_runs": int(row.success_runs or 0),
-        }
-        for row in run_stats_rows
-    }
+    for run in runs:
+        stats = run_stats_by_role_id.setdefault(
+            run.agent_role_id,
+            {
+                "total_runs": 0,
+                "success_runs": 0,
+                "latency_sum": 0,
+                "latency_count": 0,
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
+                "total_tokens": 0,
+                "total_cost_estimate": 0.0,
+                "retry_runs": 0,
+            },
+        )
+        stats["total_runs"] += 1
+        if run.run_status == "success":
+            stats["success_runs"] += 1
+        if run.latency_ms is not None:
+            stats["latency_sum"] += int(run.latency_ms)
+            stats["latency_count"] += 1
+        prompt_tokens = int(run.token_usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(run.token_usage.get("completion_tokens", 0) or 0)
+        total_tokens = int(run.token_usage.get("total_tokens", 0) or 0)
+        if total_tokens == 0:
+            total_tokens = prompt_tokens + completion_tokens
+        stats["total_prompt_tokens"] += prompt_tokens
+        stats["total_completion_tokens"] += completion_tokens
+        stats["total_tokens"] += total_tokens
+        stats["total_cost_estimate"] += estimate_cost(run.token_usage)
+        if task_run_counts.get(run.task_id, 0) > 1:
+            stats["retry_runs"] += 1
+
+    for stats in run_stats_by_role_id.values():
+        total_runs = stats["total_runs"]
+        latency_count = stats["latency_count"]
+        stats["average_latency_ms"] = (
+            round(stats["latency_sum"] / latency_count, 2) if latency_count else None
+        )
+        stats["retry_rate"] = round((stats["retry_runs"] / total_runs) * 100, 2) if total_runs else None
+        stats["average_prompt_tokens"] = round(stats["total_prompt_tokens"] / total_runs, 2) if total_runs else 0
+        stats["average_completion_tokens"] = (
+            round(stats["total_completion_tokens"] / total_runs, 2) if total_runs else 0
+        )
+        stats["average_total_tokens"] = round(stats["total_tokens"] / total_runs, 2) if total_runs else 0
+        stats["total_cost_estimate"] = round(stats["total_cost_estimate"], 6)
+        stats["average_cost_estimate"] = round(stats["total_cost_estimate"] / total_runs, 6) if total_runs else 0
 
     items = [
         _to_agent_registry_item(
             agent_role,
-            total_runs=run_stats_by_role_id.get(agent_role.id, {}).get("total_runs", 0),
-            success_runs=run_stats_by_role_id.get(agent_role.id, {}).get("success_runs", 0),
+            stats=run_stats_by_role_id.get(agent_role.id, {}),
         )
         for agent_role in agent_roles
     ]
