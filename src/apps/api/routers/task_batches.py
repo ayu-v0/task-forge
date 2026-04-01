@@ -33,8 +33,11 @@ from src.packages.core.schemas import (
     TaskBatchSummaryRead,
     TaskBatchSubmitRequest,
     TaskBatchSubmitResponse,
+    TaskBatchTaskCreate,
     TaskBatchSubmitTaskRead,
+    TaskNormalizationRead,
 )
+from src.packages.core.task_batch_normalization import normalize_batch_tasks
 from src.packages.core.timeline import load_batch_timeline
 from src.packages.core.task_state_machine import transition_task_status
 from src.packages.router import route_task
@@ -263,9 +266,18 @@ def create_task_batch(
     payload: TaskBatchSubmitRequest,
     db: Session = Depends(get_db),
 ) -> TaskBatchSubmitResponse:
-    _validate_unique_client_task_ids(payload)
-    _validate_dependencies_exist(payload)
-    _detect_cycle(payload)
+    normalized_tasks, normalization_items = normalize_batch_tasks(
+        [task.model_dump() for task in payload.tasks]
+    )
+    normalized_payload = payload.model_copy(
+        update={
+            "tasks": [TaskBatchTaskCreate.model_validate(task) for task in normalized_tasks],
+        }
+    )
+
+    _validate_unique_client_task_ids(normalized_payload)
+    _validate_dependencies_exist(normalized_payload)
+    _detect_cycle(normalized_payload)
 
     task_mapping: dict[str, TaskORM] = {}
     routing_results: dict[str, dict[str, str | bool | None | list[str]]] = {}
@@ -273,17 +285,17 @@ def create_task_batch(
     try:
         with db.begin():
             task_batch = TaskBatchORM(
-                title=payload.title,
-                description=payload.description,
-                created_by=payload.created_by,
+                title=normalized_payload.title,
+                description=normalized_payload.description,
+                created_by=normalized_payload.created_by,
                 status="draft",
-                total_tasks=len(payload.tasks),
-                metadata_json=payload.metadata,
+                total_tasks=len(normalized_payload.tasks),
+                metadata_json=normalized_payload.metadata,
             )
             db.add(task_batch)
             db.flush()
 
-            for submitted_task in payload.tasks:
+            for submitted_task in normalized_payload.tasks:
                 task = TaskORM(
                     batch_id=task_batch.id,
                     title=submitted_task.title,
@@ -301,7 +313,7 @@ def create_task_batch(
                 db.flush()
                 task_mapping[submitted_task.client_task_id] = task
 
-            for submitted_task in payload.tasks:
+            for submitted_task in normalized_payload.tasks:
                 task = task_mapping[submitted_task.client_task_id]
                 task.dependency_ids = [
                     task_mapping[dependency_id].id
@@ -310,7 +322,7 @@ def create_task_batch(
 
             agent_roles = db.scalars(select(AgentRoleORM)).all()
 
-            for submitted_task in payload.tasks:
+            for submitted_task in normalized_payload.tasks:
                 task = task_mapping[submitted_task.client_task_id]
                 route_result = route_task(task, list(agent_roles))
 
@@ -385,6 +397,8 @@ def create_task_batch(
 
         return TaskBatchSubmitResponse(
             batch_id=task_batch.id,
+            original_task_count=len(payload.tasks),
+            normalized_task_count=len(normalized_payload.tasks),
             tasks=[
                 TaskBatchSubmitTaskRead(
                     task_id=task_mapping[submitted_task.client_task_id].id,
@@ -397,7 +411,19 @@ def create_task_batch(
                     auto_execute=routing_results[submitted_task.client_task_id]["auto_execute"],
                     needs_review=routing_results[submitted_task.client_task_id]["needs_review"],
                 )
-                for submitted_task in payload.tasks
+                for submitted_task in normalized_payload.tasks
+            ],
+            normalization=[
+                TaskNormalizationRead(
+                    client_task_id=item.source_client_task_id,
+                    effective_client_task_id=item.effective_client_task_id,
+                    action=item.action,
+                    is_ambiguous=item.is_ambiguous,
+                    missing_fields_filled=item.missing_fields_filled,
+                    inferred_dependency_client_task_ids=item.inferred_dependency_client_task_ids,
+                    notes=item.notes,
+                )
+                for item in normalization_items
             ],
         )
     except HTTPException:

@@ -68,9 +68,22 @@ class TaskBatchSubmitTaskRead(SchemaModel):
     needs_review: bool = False
 
 
+class TaskNormalizationRead(SchemaModel):
+    client_task_id: str
+    effective_client_task_id: str
+    action: str
+    is_ambiguous: bool = False
+    missing_fields_filled: list[str] = Field(default_factory=list)
+    inferred_dependency_client_task_ids: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
 class TaskBatchSubmitResponse(SchemaModel):
     batch_id: str
+    original_task_count: int
+    normalized_task_count: int
     tasks: list[TaskBatchSubmitTaskRead]
+    normalization: list[TaskNormalizationRead] = Field(default_factory=list)
 
 
 class BatchCountsRead(SchemaModel):
