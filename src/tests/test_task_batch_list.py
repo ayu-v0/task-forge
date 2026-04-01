@@ -178,3 +178,9 @@ def test_console_batches_page_is_accessible() -> None:
     response = client.get("/console/batches")
     assert response.status_code == 200
     assert "Batch Console" in response.text
+
+
+def test_console_batches_assets_include_detail_link_navigation() -> None:
+    response = client.get("/console/assets/app.js")
+    assert response.status_code == 200
+    assert "/console/batches/${item.batch_id}" in response.text

@@ -454,6 +454,7 @@ def get_task_batch_summary(batch_id: str, db: Session = Depends(get_db)) -> Task
             title=task.title,
             task_type=task.task_type,
             status=task.status,
+            dependency_ids=task.dependency_ids,
             assigned_agent_role=task.assigned_agent_role,
             latest_run_id=latest_runs.get(task.id).id if latest_runs.get(task.id) is not None else None,
             latest_run_status=latest_runs.get(task.id).run_status if latest_runs.get(task.id) is not None else None,

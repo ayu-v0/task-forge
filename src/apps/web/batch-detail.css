@@ -1,0 +1,283 @@
+@import url("/console/assets/styles.css");
+
+.detail-shell {
+  max-width: 1320px;
+}
+
+.hero-row,
+.section-heading,
+.task-header,
+.detail-row,
+.task-footer,
+.dependency-row,
+.artifact-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.hero-row,
+.section-heading,
+.task-header,
+.task-footer,
+.artifact-row {
+  align-items: center;
+}
+
+.back-link {
+  color: var(--accent);
+  font-size: 0.92rem;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
+.hero-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.placeholder-button {
+  height: 42px;
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--muted);
+  font: inherit;
+}
+
+.overview-grid,
+.content-grid {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.overview-grid {
+  grid-template-columns: 1.4fr 1fr;
+}
+
+.content-grid {
+  grid-template-columns: 1.35fr 1fr;
+}
+
+.overview-card .metrics {
+  margin-bottom: 0;
+}
+
+.section-label {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.section-heading h2,
+.risk-card h2,
+.overview-card h2 {
+  margin: 0;
+}
+
+.risk-groups,
+.artifact-list,
+.dependency-map {
+  display: grid;
+  gap: 12px;
+}
+
+.risk-group,
+.artifact-row,
+.dependency-row,
+.empty-panel {
+  padding: 14px;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.risk-group strong,
+.artifact-row strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.risk-group.failed {
+  border: 1px solid rgba(164, 63, 47, 0.24);
+  background: var(--danger-soft);
+}
+
+.risk-group.needs_review {
+  border: 1px solid rgba(161, 106, 29, 0.24);
+  background: var(--warning-soft);
+}
+
+.risk-group.blocked {
+  border: 1px solid rgba(37, 90, 138, 0.18);
+  background: rgba(219, 232, 244, 0.72);
+}
+
+.risk-group ul,
+.dependency-list,
+.task-flags {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.artifact-list,
+.dependency-map {
+  min-height: 120px;
+}
+
+.artifact-row,
+.dependency-row {
+  border: 1px solid var(--line);
+}
+
+.artifact-row p,
+.dependency-row p {
+  margin: 0;
+}
+
+.artifact-meta,
+.dependency-meta {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.task-section {
+  margin-top: 22px;
+}
+
+.task-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.task-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--panel);
+  box-shadow: 0 12px 32px rgba(31, 37, 32, 0.06);
+}
+
+.task-card.failed {
+  border-color: rgba(164, 63, 47, 0.45);
+  box-shadow: 0 14px 30px rgba(164, 63, 47, 0.12);
+}
+
+.task-card.needs_review {
+  border-color: rgba(161, 106, 29, 0.45);
+}
+
+.task-card.blocked {
+  border-color: rgba(37, 90, 138, 0.35);
+}
+
+.task-header {
+  align-items: flex-start;
+}
+
+.task-header h3 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.task-meta,
+.task-footer,
+.task-empty,
+.task-error,
+.task-output,
+.task-dependencies {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.task-meta {
+  margin: 6px 0 0;
+}
+
+.task-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.detail-block {
+  padding: 14px;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.detail-block strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ink);
+}
+
+.task-output {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.task-error {
+  margin: 0;
+  color: var(--danger);
+}
+
+.task-flags {
+  color: var(--ink);
+}
+
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.meta-pill {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid var(--line);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.empty-panel {
+  color: var(--muted);
+  border: 1px dashed var(--line);
+}
+
+@media (max-width: 960px) {
+  .overview-grid,
+  .content-grid,
+  .task-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-row,
+  .section-heading,
+  .artifact-row,
+  .dependency-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .hero-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .placeholder-button {
+    width: 100%;
+  }
+}

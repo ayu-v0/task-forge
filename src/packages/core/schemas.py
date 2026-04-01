@@ -95,6 +95,7 @@ class BatchTaskResultRead(SchemaModel):
     title: str
     task_type: str
     status: TaskStatus
+    dependency_ids: list[str] = Field(default_factory=list)
     assigned_agent_role: str | None = None
     latest_run_id: str | None = None
     latest_run_status: ExecutionRunStatus | None = None

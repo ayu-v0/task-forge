@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Batch Detail</title>
+  <link rel="stylesheet" href="/console/assets/batch-detail.css">
+</head>
+<body>
+  <main class="page-shell detail-shell">
+    <section class="hero">
+      <p class="eyebrow">Operations Console</p>
+      <div class="hero-row">
+        <div>
+          <a class="back-link" href="/console/batches">Back to batches</a>
+          <h1 id="batch-title">Batch Detail</h1>
+          <p id="batch-subtitle" class="subtitle">Loading batch summary...</p>
+        </div>
+        <div class="hero-actions">
+          <button class="placeholder-button" type="button" disabled>Batch retry</button>
+          <button class="placeholder-button" type="button" disabled>Batch cancel</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="status-row">
+      <p id="status-text">Loading batch summary...</p>
+    </section>
+
+    <section class="overview-grid">
+      <article class="batch-card overview-card">
+        <div class="card-top">
+          <div>
+            <p class="section-label">Batch overview</p>
+            <h2 id="overview-heading">Current state</h2>
+          </div>
+          <span id="overview-status" class="status-badge status-pending">pending</span>
+        </div>
+        <dl id="overview-metrics" class="metrics"></dl>
+      </article>
+
+      <article class="batch-card risk-card">
+        <div class="card-top">
+          <div>
+            <p class="section-label">Risk focus</p>
+            <h2>Immediate attention</h2>
+          </div>
+        </div>
+        <div id="risk-groups" class="risk-groups"></div>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <article class="batch-card">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">Dependencies</p>
+            <h2>Task graph</h2>
+          </div>
+        </div>
+        <div id="dependency-map" class="dependency-map"></div>
+      </article>
+
+      <article class="batch-card">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">Artifacts</p>
+            <h2>Batch outputs</h2>
+          </div>
+        </div>
+        <div id="artifact-list" class="artifact-list"></div>
+      </article>
+    </section>
+
+    <section class="task-section">
+      <div class="section-heading">
+        <div>
+          <p class="section-label">Tasks</p>
+          <h2>Execution detail</h2>
+        </div>
+      </div>
+      <section id="task-grid" class="task-grid" aria-live="polite"></section>
+    </section>
+  </main>
+
+  <script src="/console/assets/batch-detail.js"></script>
+</body>
+</html>
