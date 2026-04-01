@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from src.apps.api.deps import get_db
-from src.packages.core.db.models import AgentRoleORM
+from src.packages.core.db.models import AgentRoleORM, ExecutionRunORM
 from src.packages.core.schemas import (
     AgentCapabilityDeclaration,
     AgentRoleDetailRead,
+    AgentRegistryDiagnosisRead,
+    AgentRegistryListItemRead,
+    AgentRegistryResponse,
     AgentRoleRegisterRequest,
     AgentRoleUpdateRequest,
 )
@@ -42,6 +47,32 @@ def _to_agent_detail(agent_role: AgentRoleORM) -> AgentRoleDetailRead:
     )
 
 
+def _to_agent_registry_item(
+    agent_role: AgentRoleORM,
+    *,
+    total_runs: int,
+    success_runs: int,
+) -> AgentRegistryListItemRead:
+    success_rate = None
+    if total_runs > 0:
+        success_rate = round((success_runs / total_runs) * 100, 2)
+
+    return AgentRegistryListItemRead(
+        id=agent_role.id,
+        role_name=agent_role.role_name,
+        description=agent_role.description,
+        capabilities=agent_role.capabilities,
+        capability_declaration=_build_capability_declaration(agent_role),
+        input_schema=agent_role.input_schema,
+        output_schema=agent_role.output_schema,
+        enabled=agent_role.enabled,
+        version=agent_role.version,
+        total_runs=total_runs,
+        success_runs=success_runs,
+        success_rate=success_rate,
+    )
+
+
 def _merge_input_schema(
     base_schema: dict,
     capability_declaration: AgentCapabilityDeclaration,
@@ -61,6 +92,50 @@ def _merge_output_schema(
     merged = dict(base_schema)
     merged["output_contract"] = capability_declaration.output_contract
     return merged
+
+
+def _supported_task_types(agent_role: AgentRoleORM) -> list[str]:
+    supported = agent_role.input_schema.get("supported_task_types", [])
+    if isinstance(supported, list):
+        return [str(item) for item in supported]
+    return []
+
+
+def _build_registry_diagnosis(
+    agent_roles: list[AgentRoleORM],
+    task_type: str,
+) -> AgentRegistryDiagnosisRead:
+    matching_enabled_roles: list[str] = []
+    matching_disabled_roles: list[str] = []
+
+    for agent_role in agent_roles:
+        if task_type not in _supported_task_types(agent_role):
+            continue
+        if agent_role.enabled:
+            matching_enabled_roles.append(agent_role.role_name)
+        else:
+            matching_disabled_roles.append(agent_role.role_name)
+
+    if matching_enabled_roles:
+        status_name = "matched_enabled"
+        message = f"Found {len(matching_enabled_roles)} enabled role(s) for task_type={task_type}."
+    elif matching_disabled_roles:
+        status_name = "matched_disabled_only"
+        message = (
+            f"No enabled role can execute task_type={task_type}; "
+            "matching roles exist but are disabled."
+        )
+    else:
+        status_name = "no_match"
+        message = f"No agent role declares support for task_type={task_type}."
+
+    return AgentRegistryDiagnosisRead(
+        task_type=task_type,
+        status=status_name,
+        message=message,
+        matching_enabled_roles=matching_enabled_roles,
+        matching_disabled_roles=matching_disabled_roles,
+    )
 
 
 @router.post("/register", response_model=AgentRoleDetailRead, status_code=status.HTTP_201_CREATED)
@@ -98,6 +173,50 @@ def register_agent(
 def list_agents(db: Session = Depends(get_db)) -> list[AgentRoleDetailRead]:
     agent_roles = db.scalars(select(AgentRoleORM).order_by(AgentRoleORM.role_name)).all()
     return [_to_agent_detail(agent_role) for agent_role in agent_roles]
+
+
+@router.get("/registry", response_model=AgentRegistryResponse)
+def get_agent_registry(
+    task_type: str | None = None,
+    db: Session = Depends(get_db),
+) -> AgentRegistryResponse:
+    agent_roles = db.scalars(select(AgentRoleORM).order_by(AgentRoleORM.role_name)).all()
+
+    run_stats_rows = db.execute(
+        select(
+            ExecutionRunORM.agent_role_id,
+            func.count(ExecutionRunORM.id).label("total_runs"),
+            func.coalesce(
+                func.sum(case((ExecutionRunORM.run_status == "success", 1), else_=0)),
+                0,
+            ).label("success_runs"),
+        )
+        .group_by(ExecutionRunORM.agent_role_id)
+    ).all()
+
+    run_stats_by_role_id: dict[str, dict[str, Any]] = {
+        row.agent_role_id: {
+            "total_runs": int(row.total_runs or 0),
+            "success_runs": int(row.success_runs or 0),
+        }
+        for row in run_stats_rows
+    }
+
+    items = [
+        _to_agent_registry_item(
+            agent_role,
+            total_runs=run_stats_by_role_id.get(agent_role.id, {}).get("total_runs", 0),
+            success_runs=run_stats_by_role_id.get(agent_role.id, {}).get("success_runs", 0),
+        )
+        for agent_role in agent_roles
+    ]
+
+    diagnosis = None
+    normalized_task_type = task_type.strip() if task_type else ""
+    if normalized_task_type:
+        diagnosis = _build_registry_diagnosis(agent_roles, normalized_task_type)
+
+    return AgentRegistryResponse(items=items, diagnosis=diagnosis)
 
 
 @router.get("/{agent_id}", response_model=AgentRoleDetailRead)

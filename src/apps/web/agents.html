@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Registry</title>
+  <link rel="stylesheet" href="/console/assets/agents.css">
+</head>
+<body>
+  <main class="page-shell">
+    <section class="hero">
+      <p class="eyebrow">Operations Console</p>
+      <div class="hero-row">
+        <div>
+          <p class="overline">Registry visibility</p>
+          <h1>Agent Registry</h1>
+          <p class="subtitle">Inspect available executors, compare declared schemas, and diagnose why a task type has no eligible role.</p>
+        </div>
+        <div class="hero-actions">
+          <a class="nav-link" href="/console/batches">Open batch console</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="toolbar">
+      <label class="field">
+        <span>Task type diagnosis</span>
+        <input id="task-type-input" type="search" placeholder="generate">
+      </label>
+      <button id="diagnose-button" class="action-button" type="button">Diagnose</button>
+      <button id="refresh-button" class="secondary-button" type="button">Refresh</button>
+    </section>
+
+    <section class="status-row">
+      <p id="status-text">Loading agent registry...</p>
+    </section>
+
+    <section class="overview-grid">
+      <article class="panel summary-panel">
+        <p class="section-label">Registry summary</p>
+        <h2>Current role inventory</h2>
+        <dl id="summary-metrics" class="metrics"></dl>
+      </article>
+
+      <article class="panel diagnosis-panel">
+        <p class="section-label">Routing diagnosis</p>
+        <h2>Why no suitable role?</h2>
+        <div id="diagnosis-content" class="empty-panel">Enter a task type to inspect matching roles.</div>
+      </article>
+    </section>
+
+    <section class="registry-section">
+      <div class="section-heading">
+        <div>
+          <p class="section-label">Roles</p>
+          <h2>Execution registry</h2>
+        </div>
+      </div>
+      <section id="agent-grid" class="agent-grid" aria-live="polite"></section>
+    </section>
+  </main>
+
+  <script src="/console/assets/agents.js"></script>
+</body>
+</html>

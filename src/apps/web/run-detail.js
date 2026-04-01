@@ -10,6 +10,7 @@ const outputSnapshot = document.getElementById("output-snapshot");
 const errorPanel = document.getElementById("error-panel");
 const logList = document.getElementById("log-list");
 const retryHistory = document.getElementById("retry-history");
+const taskTimeline = document.getElementById("task-timeline");
 const eventList = document.getElementById("event-list");
 const backToBatch = document.getElementById("back-to-batch");
 
@@ -144,6 +145,29 @@ function renderRetryHistory(detail) {
     .join("");
 }
 
+function renderTaskTimeline(timeline) {
+  if (!timeline.items.length) {
+    taskTimeline.innerHTML = `<article class="empty-state">No lifecycle timeline available.</article>`;
+    return;
+  }
+
+  taskTimeline.innerHTML = timeline.items
+    .map(
+      (item) => `
+        <article class="event-entry">
+          <strong>${escapeHtml(item.title)}</strong>
+          <p>${escapeHtml(item.detail ?? "No additional detail.")}</p>
+          <p class="event-meta">
+            ${escapeHtml(item.stage)} · ${escapeHtml(formatDate(item.timestamp))}
+            · run ${escapeHtml(item.run_id ?? "n/a")}
+            · actor ${escapeHtml(item.actor ?? "system")}
+          </p>
+        </article>
+      `,
+    )
+    .join("");
+}
+
 function renderEvents(detail) {
   if (!detail.events.length) {
     eventList.innerHTML = `<article class="empty-state">No task events available.</article>`;
@@ -171,6 +195,7 @@ function renderError(message) {
   errorPanel.innerHTML = `<div class="empty-panel">${escapeHtml(message)}</div>`;
   logList.innerHTML = `<div class="empty-panel">${escapeHtml(message)}</div>`;
   retryHistory.innerHTML = `<div class="empty-panel">${escapeHtml(message)}</div>`;
+  taskTimeline.innerHTML = `<article class="empty-state">${escapeHtml(message)}</article>`;
   eventList.innerHTML = `<article class="empty-state">${escapeHtml(message)}</article>`;
 }
 
@@ -182,20 +207,26 @@ async function loadRunDetail() {
   }
 
   try {
-    const response = await fetch(`/runs/${runId}/detail`);
-    if (response.status === 404) {
+    const detailResponse = await fetch(`/runs/${runId}/detail`);
+    if (detailResponse.status === 404) {
       throw new Error("Run not found.");
     }
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`);
+    if (!detailResponse.ok) {
+      throw new Error(`Request failed with status ${detailResponse.status}`);
     }
 
-    const detail = await response.json();
+    const detail = await detailResponse.json();
+    const timelineResponse = await fetch(`/tasks/${detail.task.task_id}/timeline`);
+    if (!timelineResponse.ok) {
+      throw new Error(`Timeline request failed with status ${timelineResponse.status}`);
+    }
+    const timeline = await timelineResponse.json();
     renderOverview(detail);
     renderRouting(detail);
     renderSnapshots(detail);
     renderErrorAndLogs(detail);
     renderRetryHistory(detail);
+    renderTaskTimeline(timeline);
     renderEvents(detail);
   } catch (error) {
     renderError(error.message);

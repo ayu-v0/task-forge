@@ -144,6 +144,16 @@ def test_batch_detail_page_can_link_to_run_detail_when_latest_run_exists() -> No
     assert "View run detail" in response.text
 
 
+def test_batch_detail_page_assets_include_batch_timeline() -> None:
+    page_response = client.get("/console/batches/sample-batch-id")
+    assert page_response.status_code == 200
+    assert "Execution timeline" in page_response.text
+
+    asset_response = client.get("/console/assets/batch-detail.js")
+    assert asset_response.status_code == 200
+    assert "/task-batches/${batchId}/timeline" in asset_response.text
+
+
 def test_batch_detail_summary_supports_mixed_risk_sections() -> None:
     suffix = uuid.uuid4().hex[:8]
     _register_agent(client, role_name="default_worker", supported_task_types=[])

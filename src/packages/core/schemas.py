@@ -175,6 +175,38 @@ class TaskEventRead(SchemaModel):
     created_at: datetime
 
 
+class TaskStatusHistoryItemRead(SchemaModel):
+    task_id: str
+    old_status: str | None = None
+    new_status: str
+    timestamp: datetime
+    reason: str | None = None
+    actor: str | None = None
+
+
+class TimelineItemRead(SchemaModel):
+    timestamp: datetime
+    stage: str
+    title: str
+    detail: str | None = None
+    task_id: str | None = None
+    run_id: str | None = None
+    status: str | None = None
+    actor: str | None = None
+
+
+class TaskTimelineRead(SchemaModel):
+    task_id: str
+    batch_id: str
+    items: list[TimelineItemRead] = Field(default_factory=list)
+
+
+class BatchTimelineRead(SchemaModel):
+    batch_id: str
+    title: str
+    items: list[TimelineItemRead] = Field(default_factory=list)
+
+
 class AgentRoleCreate(SchemaModel):
     role_name: str
     description: str | None = None
@@ -236,6 +268,34 @@ class AgentRoleDetailRead(SchemaModel):
     max_retries: int
     enabled: bool
     version: str
+
+
+class AgentRegistryListItemRead(SchemaModel):
+    id: str
+    role_name: str
+    description: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    capability_declaration: AgentCapabilityDeclaration
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool
+    version: str
+    total_runs: int = 0
+    success_runs: int = 0
+    success_rate: float | None = None
+
+
+class AgentRegistryDiagnosisRead(SchemaModel):
+    task_type: str
+    status: str
+    message: str
+    matching_enabled_roles: list[str] = Field(default_factory=list)
+    matching_disabled_roles: list[str] = Field(default_factory=list)
+
+
+class AgentRegistryResponse(SchemaModel):
+    items: list[AgentRegistryListItemRead] = Field(default_factory=list)
+    diagnosis: AgentRegistryDiagnosisRead | None = None
 
 
 class AssignmentCreate(SchemaModel):

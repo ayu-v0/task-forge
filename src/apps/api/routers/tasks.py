@@ -8,7 +8,14 @@ from sqlalchemy.orm import Session
 
 from src.apps.api.deps import get_db
 from src.packages.core.db.models import EventLogORM, TaskORM
-from src.packages.core.schemas import TaskCancelRequest, TaskEventRead, TaskRead
+from src.packages.core.schemas import (
+    TaskCancelRequest,
+    TaskEventRead,
+    TaskRead,
+    TaskTimelineRead,
+    TaskStatusHistoryItemRead,
+)
+from src.packages.core.timeline import load_task_timeline
 from src.packages.core.task_state_machine import TaskStatusTransitionError, transition_task_status
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -38,6 +45,41 @@ def get_task_events(task_id: str, db: Session = Depends(get_db)) -> list[TaskEve
         .order_by(EventLogORM.created_at.asc())
     ).all()
     return [TaskEventRead.model_validate(event) for event in events]
+
+
+@router.get("/{task_id}/status-history", response_model=list[TaskStatusHistoryItemRead])
+def get_task_status_history(task_id: str, db: Session = Depends(get_db)) -> list[TaskStatusHistoryItemRead]:
+    task = db.get(TaskORM, task_id)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    events = db.scalars(
+        select(EventLogORM)
+        .where(
+            EventLogORM.task_id == task_id,
+            EventLogORM.event_type == "task_status_changed",
+        )
+        .order_by(EventLogORM.created_at.asc(), EventLogORM.id.asc())
+    ).all()
+    return [
+        TaskStatusHistoryItemRead(
+            task_id=event.task_id or task_id,
+            old_status=event.payload.get("from_status"),
+            new_status=event.payload.get("to_status") or event.event_status or "unknown",
+            timestamp=event.created_at,
+            reason=event.message,
+            actor=event.payload.get("source"),
+        )
+        for event in events
+    ]
+
+
+@router.get("/{task_id}/timeline", response_model=TaskTimelineRead)
+def get_task_timeline(task_id: str, db: Session = Depends(get_db)) -> TaskTimelineRead:
+    timeline = load_task_timeline(db, task_id)
+    if timeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    return timeline
 
 
 @router.post("/{task_id}/cancel", response_model=TaskRead)

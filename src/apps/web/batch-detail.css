@@ -84,7 +84,8 @@
 
 .risk-groups,
 .artifact-list,
-.dependency-map {
+.dependency-map,
+.timeline-list {
   display: grid;
   gap: 12px;
 }
@@ -92,6 +93,7 @@
 .risk-group,
 .artifact-row,
 .dependency-row,
+.timeline-entry,
 .empty-panel {
   padding: 14px;
   border-radius: 16px;
@@ -127,12 +129,14 @@
 }
 
 .artifact-list,
-.dependency-map {
+.dependency-map,
+.timeline-list {
   min-height: 120px;
 }
 
 .artifact-row,
-.dependency-row {
+.dependency-row,
+.timeline-entry {
   border: 1px solid var(--line);
 }
 
@@ -142,9 +146,36 @@
 }
 
 .artifact-meta,
-.dependency-meta {
+.dependency-meta,
+.timeline-meta {
   color: var(--muted);
   font-size: 0.86rem;
+}
+
+.timeline-entry {
+  display: grid;
+  gap: 8px;
+}
+
+.timeline-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.timeline-head strong,
+.timeline-entry p {
+  margin: 0;
+}
+
+.timeline-stage {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.8rem;
+  text-transform: uppercase;
 }
 
 .task-section {
