@@ -175,6 +175,15 @@ class TaskEventRead(SchemaModel):
     created_at: datetime
 
 
+class TaskStatusHistoryItemRead(SchemaModel):
+    task_id: str
+    old_status: str | None = None
+    new_status: str
+    timestamp: datetime
+    reason: str | None = None
+    actor: str | None = None
+
+
 class AgentRoleCreate(SchemaModel):
     role_name: str
     description: str | None = None
