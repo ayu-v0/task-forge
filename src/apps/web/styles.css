@@ -181,6 +181,20 @@ body {
   font-size: 0.88rem;
 }
 
+.card-actions {
+  margin-top: 16px;
+}
+
+.detail-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+.detail-link:hover {
+  text-decoration: underline;
+}
+
 @media (max-width: 960px) {
   .toolbar {
     grid-template-columns: 1fr 1fr;

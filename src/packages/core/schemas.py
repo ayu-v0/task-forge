@@ -95,6 +95,7 @@ class BatchTaskResultRead(SchemaModel):
     title: str
     task_type: str
     status: TaskStatus
+    dependency_ids: list[str] = Field(default_factory=list)
     assigned_agent_role: str | None = None
     latest_run_id: str | None = None
     latest_run_status: ExecutionRunStatus | None = None
@@ -267,6 +268,40 @@ class ExecutionRunCreate(SchemaModel):
 
 class ExecutionRunRead(ExecutionRunCreate):
     id: str
+
+
+class RunDetailTaskRead(SchemaModel):
+    task_id: str
+    title: str
+    task_type: str
+    status: TaskStatus
+    assigned_agent_role: str | None = None
+    retry_count: int
+    batch_id: str
+
+
+class RunRoutingRead(SchemaModel):
+    routing_reason: str | None = None
+    agent_role_id: str | None = None
+    agent_role_name: str | None = None
+
+
+class RunRetryHistoryItemRead(SchemaModel):
+    run_id: str
+    run_status: ExecutionRunStatus
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    latency_ms: int | None = Field(default=None, ge=0)
+    error_message: str | None = None
+    is_current: bool = False
+
+
+class RunDetailRead(SchemaModel):
+    run: ExecutionRunRead
+    task: RunDetailTaskRead
+    routing: RunRoutingRead
+    retry_history: list[RunRetryHistoryItemRead] = Field(default_factory=list)
+    events: list[TaskEventRead] = Field(default_factory=list)
 
 
 class ReviewCheckpointCreate(SchemaModel):

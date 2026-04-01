@@ -46,6 +46,9 @@ function renderBatches(items) {
             <p><strong>Created:</strong> ${formatDate(item.created_at)}</p>
             <p><strong>Updated:</strong> ${formatDate(item.updated_at)}</p>
           </div>
+          <div class="card-actions">
+            <a class="detail-link" href="/console/batches/${item.batch_id}">View detail</a>
+          </div>
         </article>
       `,
     )
