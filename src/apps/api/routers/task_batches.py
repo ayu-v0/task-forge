@@ -19,10 +19,12 @@ from src.packages.core.db.models import (
     TaskBatchORM,
     TaskORM,
 )
+from src.packages.core.error_classification import classify_task_error, summarize_failure_categories
 from src.packages.core.schemas import (
     BatchTimelineRead,
     BatchArtifactRead,
     BatchCountsRead,
+    FailureCategorySummaryRead,
     BatchProgressRead,
     BatchTaskResultRead,
     TaskBatchListItemRead,
@@ -140,6 +142,36 @@ def _load_batch_artifacts(task_ids: list[str], db: Session) -> tuple[list[Artifa
         if artifact.task_id is not None:
             artifact_counts[artifact.task_id] = artifact_counts.get(artifact.task_id, 0) + 1
     return artifacts, artifact_counts
+
+
+def _load_active_assignments(task_ids: list[str], db: Session) -> dict[str, AssignmentORM]:
+    if not task_ids:
+        return {}
+
+    assignments = db.scalars(
+        select(AssignmentORM)
+        .where(AssignmentORM.task_id.in_(task_ids))
+        .order_by(AssignmentORM.assigned_at.desc(), AssignmentORM.id.desc())
+    ).all()
+    latest_assignments: dict[str, AssignmentORM] = {}
+    for assignment in assignments:
+        latest_assignments.setdefault(assignment.task_id, assignment)
+    return latest_assignments
+
+
+def _load_latest_reviews(task_ids: list[str], db: Session) -> dict[str, ReviewCheckpointORM]:
+    if not task_ids:
+        return {}
+
+    reviews = db.scalars(
+        select(ReviewCheckpointORM)
+        .where(ReviewCheckpointORM.task_id.in_(task_ids))
+        .order_by(ReviewCheckpointORM.created_at.desc(), ReviewCheckpointORM.id.desc())
+    ).all()
+    latest_reviews: dict[str, ReviewCheckpointORM] = {}
+    for review in reviews:
+        latest_reviews.setdefault(review.task_id, review)
+    return latest_reviews
 
 
 def _batch_updated_at(task_batch: TaskBatchORM, tasks: list[TaskORM]) -> datetime:
@@ -454,6 +486,8 @@ def get_task_batch_summary(batch_id: str, db: Session = Depends(get_db)) -> Task
     task_ids = [task.id for task in tasks]
     latest_runs = _load_latest_runs(task_ids, db)
     artifacts, artifact_counts = _load_batch_artifacts(task_ids, db)
+    latest_assignments = _load_active_assignments(task_ids, db)
+    latest_reviews = _load_latest_reviews(task_ids, db)
     counts = _build_batch_counts(tasks)
     progress = _build_batch_progress(tasks)
     derived_status = _derive_batch_status(tasks)
@@ -471,6 +505,15 @@ def get_task_batch_summary(batch_id: str, db: Session = Depends(get_db)) -> Task
             output_snapshot=latest_runs.get(task.id).output_snapshot if latest_runs.get(task.id) is not None else {},
             error_message=latest_runs.get(task.id).error_message if latest_runs.get(task.id) is not None else None,
             cancel_reason=latest_runs.get(task.id).cancel_reason if latest_runs.get(task.id) is not None else None,
+            error_category=classify_task_error(
+                task_status=task.status,
+                dependency_ids=task.dependency_ids,
+                run_status=latest_runs.get(task.id).run_status if latest_runs.get(task.id) is not None else None,
+                error_message=latest_runs.get(task.id).error_message if latest_runs.get(task.id) is not None else None,
+                logs=latest_runs.get(task.id).logs if latest_runs.get(task.id) is not None else None,
+                routing_reason=latest_assignments.get(task.id).routing_reason if latest_assignments.get(task.id) is not None else None,
+                review_reason=latest_reviews.get(task.id).reason if latest_reviews.get(task.id) is not None else None,
+            ),
             artifact_count=artifact_counts.get(task.id, 0),
         )
         for task in tasks
@@ -496,4 +539,23 @@ def get_task_batch_summary(batch_id: str, db: Session = Depends(get_db)) -> Task
         progress=progress,
         tasks=task_results,
         artifacts=artifact_reads,
+        failure_categories=[
+            FailureCategorySummaryRead.model_validate(item)
+            for item in summarize_failure_categories(
+                [
+                    {
+                        "task_id": task.task_id,
+                        "error_category": task.error_category,
+                        "error_message": task.error_message,
+                        "cancel_reason": task.cancel_reason,
+                        "routing_reason": (
+                            latest_assignments.get(task.task_id).routing_reason
+                            if latest_assignments.get(task.task_id) is not None
+                            else None
+                        ),
+                    }
+                    for task in task_results
+                ]
+            )
+        ],
     )

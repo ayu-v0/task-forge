@@ -55,7 +55,8 @@ function renderOverview(summary) {
     .join("");
 }
 
-function renderRiskGroups(tasks) {
+function renderRiskGroups(summary) {
+  const tasks = summary.tasks;
   const groups = [
     {
       key: "failed",
@@ -77,7 +78,14 @@ function renderRiskGroups(tasks) {
     },
   ];
 
-  const activeGroups = groups.filter((group) => group.items.length > 0);
+  const categoryGroups = (summary.failure_categories ?? []).map((item) => ({
+    key: item.category,
+    label: `Error category · ${item.category}`,
+    items: tasks.filter((task) => task.error_category === item.category),
+    description: `${item.count} task${item.count === 1 ? "" : "s"} currently grouped here.`,
+  }));
+
+  const activeGroups = [...groups.filter((group) => group.items.length > 0), ...categoryGroups];
   if (!activeGroups.length) {
     riskGroups.innerHTML = `<div class="empty-panel">No failed, blocked, or review-pending tasks in this batch.</div>`;
     return;
@@ -201,6 +209,9 @@ function taskFlags(task) {
   if (task.status === "failed" && task.error_message) {
     flags.push("Latest run returned an error");
   }
+  if (task.error_category) {
+    flags.push(`Error category: ${task.error_category}`);
+  }
   return flags;
 }
 
@@ -235,6 +246,11 @@ function renderTasks(tasks) {
                 <span class="meta-pill">agent ${escapeHtml(task.assigned_agent_role ?? "unassigned")}</span>
                 <span class="meta-pill">latest run ${escapeHtml(task.latest_run_status ?? "not started")}</span>
                 <span class="meta-pill">${escapeHtml(task.artifact_count)} artifacts</span>
+                ${
+                  task.error_category
+                    ? `<span class="meta-pill">error ${escapeHtml(task.error_category)}</span>`
+                    : ""
+                }
               </div>
               ${
                 task.latest_run_id
@@ -317,7 +333,7 @@ async function loadBatchDetail() {
     ]);
     statusText.textContent = `Batch ${summary.batch.id} is currently ${summary.derived_status}.`;
     renderOverview(summary);
-    renderRiskGroups(summary.tasks);
+    renderRiskGroups(summary);
     renderDependencyMap(summary.tasks);
     renderArtifacts(summary.artifacts);
     renderTimeline(timeline.items);

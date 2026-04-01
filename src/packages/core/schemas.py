@@ -102,6 +102,7 @@ class BatchTaskResultRead(SchemaModel):
     output_snapshot: dict[str, Any] = Field(default_factory=dict)
     error_message: str | None = None
     cancel_reason: str | None = None
+    error_category: str | None = None
     artifact_count: int = 0
 
 
@@ -115,6 +116,13 @@ class BatchArtifactRead(SchemaModel):
     created_at: datetime
 
 
+class FailureCategorySummaryRead(SchemaModel):
+    category: str
+    count: int
+    task_ids: list[str] = Field(default_factory=list)
+    sample_messages: list[str] = Field(default_factory=list)
+
+
 class TaskBatchSummaryRead(SchemaModel):
     batch: TaskBatchRead
     derived_status: str
@@ -122,6 +130,7 @@ class TaskBatchSummaryRead(SchemaModel):
     progress: BatchProgressRead
     tasks: list[BatchTaskResultRead]
     artifacts: list[BatchArtifactRead]
+    failure_categories: list[FailureCategorySummaryRead] = Field(default_factory=list)
 
 
 class TaskBatchListItemRead(SchemaModel):
@@ -373,6 +382,7 @@ class RunDetailRead(SchemaModel):
     retry_history: list[RunRetryHistoryItemRead] = Field(default_factory=list)
     events: list[TaskEventRead] = Field(default_factory=list)
     cost_estimate: float = 0
+    error_category: str | None = None
 
 
 class ReviewCheckpointCreate(SchemaModel):

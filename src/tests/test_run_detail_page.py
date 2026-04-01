@@ -184,7 +184,42 @@ def test_run_detail_endpoint_returns_routing_and_retry_history() -> None:
     assert payload["retry_history"][0]["is_current"] is True
     assert payload["run"]["token_usage"]["total_tokens"] == 8
     assert payload["cost_estimate"] == 0.000011
+    assert payload["error_category"] is None
     assert payload["events"][-1]["event_type"] == "run_completed"
+
+
+def test_run_detail_endpoint_returns_error_category_for_failed_run() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role_name = f"{TEST_PREFIX}timeout-{suffix}"
+    _register_agent(client, role_name=role_name, supported_task_types=["generate"])
+    response = client.post("/task-batches", json=_batch_payload("generate", suffix))
+    assert response.status_code == 201
+    task_id = response.json()["tasks"][0]["task_id"]
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        task = session.get(TaskORM, task_id)
+        assert task is not None
+        assignment = session.query(AssignmentORM).filter(AssignmentORM.task_id == task.id).first()
+        assert assignment is not None
+        run = ExecutionRunORM(
+            task_id=task.id,
+            agent_role_id=assignment.agent_role_id,
+            run_status="failed",
+            error_message="tool timed out while waiting for response",
+            logs=["command timed out"],
+            input_snapshot={"attempt": 1},
+            output_snapshot={},
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+    detail_response = client.get(f"/runs/{run_id}/detail")
+    assert detail_response.status_code == 200
+    payload = detail_response.json()
+    assert payload["run"]["run_status"] == "failed"
+    assert payload["error_category"] == "timeout"
 
 
 def test_run_detail_endpoint_handles_cancelled_run_without_logs() -> None:
@@ -220,6 +255,7 @@ def test_run_detail_endpoint_handles_cancelled_run_without_logs() -> None:
     assert payload["run"]["run_status"] == "cancelled"
     assert payload["run"]["cancel_reason"] == "user requested cancellation"
     assert payload["run"]["logs"] == []
+    assert payload["error_category"] is None
 
 
 def test_console_run_detail_page_is_accessible() -> None:
@@ -238,6 +274,7 @@ def test_run_detail_page_assets_include_task_lifecycle_timeline() -> None:
     assert asset_response.status_code == 200
     assert "/tasks/${detail.task.task_id}/timeline" in asset_response.text
     assert "Cost estimate" in asset_response.text
+    assert "Error category" in asset_response.text
 
 
 def test_batch_detail_assets_link_to_run_detail_page() -> None:

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from src.apps.api.deps import get_db
 from src.packages.core.costs import estimate_cost
 from src.packages.core.db.models import AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, TaskORM
+from src.packages.core.error_classification import classify_run_error
 from src.packages.core.schemas import (
     ExecutionRunRead,
     RunDetailRead,
@@ -91,6 +92,12 @@ def get_run_detail(run_id: str, db: Session = Depends(get_db)) -> RunDetailRead:
         ],
         events=[TaskEventRead.model_validate(event) for event in events],
         cost_estimate=estimate_cost(run.token_usage),
+        error_category=classify_run_error(
+            run_status=run.run_status,
+            error_message=run.error_message,
+            logs=run.logs,
+            routing_reason=assignment.routing_reason if assignment is not None else None,
+        ),
     )
 
 
