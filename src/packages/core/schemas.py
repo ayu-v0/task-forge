@@ -283,6 +283,16 @@ class AgentRegistryListItemRead(SchemaModel):
     total_runs: int = 0
     success_runs: int = 0
     success_rate: float | None = None
+    average_latency_ms: float | None = None
+    retry_rate: float | None = None
+    average_prompt_tokens: float = 0
+    average_completion_tokens: float = 0
+    average_total_tokens: float = 0
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_tokens: int = 0
+    average_cost_estimate: float = 0
+    total_cost_estimate: float = 0
 
 
 class AgentRegistryDiagnosisRead(SchemaModel):
@@ -362,6 +372,7 @@ class RunDetailRead(SchemaModel):
     routing: RunRoutingRead
     retry_history: list[RunRetryHistoryItemRead] = Field(default_factory=list)
     events: list[TaskEventRead] = Field(default_factory=list)
+    cost_estimate: float = 0
 
 
 class ReviewCheckpointCreate(SchemaModel):

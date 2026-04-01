@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.apps.api.deps import get_db
+from src.packages.core.costs import estimate_cost
 from src.packages.core.db.models import AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, TaskORM
 from src.packages.core.schemas import (
     ExecutionRunRead,
@@ -89,6 +90,7 @@ def get_run_detail(run_id: str, db: Session = Depends(get_db)) -> RunDetailRead:
             for item in runs
         ],
         events=[TaskEventRead.model_validate(event) for event in events],
+        cost_estimate=estimate_cost(run.token_usage),
     )
 
 

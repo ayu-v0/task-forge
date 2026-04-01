@@ -183,6 +183,7 @@ def test_run_detail_endpoint_returns_routing_and_retry_history() -> None:
     assert [item["run_status"] for item in payload["retry_history"]] == ["success", "failed"]
     assert payload["retry_history"][0]["is_current"] is True
     assert payload["run"]["token_usage"]["total_tokens"] == 8
+    assert payload["cost_estimate"] == 0.000011
     assert payload["events"][-1]["event_type"] == "run_completed"
 
 
@@ -236,6 +237,7 @@ def test_run_detail_page_assets_include_task_lifecycle_timeline() -> None:
     asset_response = client.get("/console/assets/run-detail.js")
     assert asset_response.status_code == 200
     assert "/tasks/${detail.task.task_id}/timeline" in asset_response.text
+    assert "Cost estimate" in asset_response.text
 
 
 def test_batch_detail_assets_link_to_run_detail_page() -> None:

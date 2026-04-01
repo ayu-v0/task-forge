@@ -64,6 +64,7 @@ function renderOverview(detail) {
     ["Prompt tokens", detail.run.token_usage?.prompt_tokens ?? 0],
     ["Completion tokens", detail.run.token_usage?.completion_tokens ?? 0],
     ["Total tokens", detail.run.token_usage?.total_tokens ?? 0],
+    ["Cost estimate", `$${Number(detail.cost_estimate ?? 0).toFixed(6)}`],
   ];
   overviewMetrics.innerHTML = metrics
     .map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`)
