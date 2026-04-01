@@ -1,0 +1,412 @@
+from __future__ import annotations
+
+import os
+import sys
+import uuid
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
+
+
+ROOT = Path(__file__).resolve().parents[2]
+TEST_ROLE_PREFIX = "registry-test-role-"
+TEST_BATCH_PREFIX = "registry-test-batch-"
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
+def _database_url() -> str:
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is not set")
+    return database_url
+
+
+def _cleanup_database() -> None:
+    engine = create_engine(_database_url())
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                DELETE FROM task_batches
+                WHERE title LIKE :batch_prefix
+                """
+            ),
+            {"batch_prefix": f"{TEST_BATCH_PREFIX}%"},
+        )
+        conn.execute(
+            text(
+                """
+                DELETE FROM agent_roles
+                WHERE role_name LIKE :role_prefix
+                """
+            ),
+            {"role_prefix": f"{TEST_ROLE_PREFIX}%"},
+        )
+
+
+def _register_agent(
+    client: TestClient,
+    *,
+    role_name: str,
+    supported_task_types: list[str],
+    enabled: bool = True,
+) -> dict:
+    payload = {
+        "role_name": role_name,
+        "description": "registry test role",
+        "capabilities": [f"task:{role_name}", "task:registry"],
+        "capability_declaration": {
+            "supported_task_types": supported_task_types,
+            "input_requirements": {"type": "object", "properties": {"text": {"type": "string"}}},
+            "output_contract": {"type": "object", "properties": {"summary": {"type": "string"}}},
+            "supports_concurrency": True,
+            "allows_auto_retry": False,
+        },
+        "input_schema": {"schema_version": "1"},
+        "output_schema": {"schema_version": "1"},
+        "timeout_seconds": 300,
+        "max_retries": 0,
+        "enabled": enabled,
+        "version": "1.0.0",
+    }
+    response = client.post("/agents/register", json=payload)
+    assert response.status_code == 201
+    return response.json()
+
+
+def _create_batch_with_task(client: TestClient, *, task_type: str, suffix: str) -> str:
+    response = client.post(
+        "/task-batches",
+        json={
+            "title": f"{TEST_BATCH_PREFIX}{suffix}",
+            "description": "registry test batch",
+            "created_by": "pytest",
+            "metadata": {"suite": "agent-registry"},
+            "tasks": [
+                {
+                    "client_task_id": "task_1",
+                    "title": f"registry task {suffix} 1",
+                    "task_type": task_type,
+                    "priority": "medium",
+                    "input_payload": {"text": "alpha"},
+                    "expected_output_schema": {"type": "object"},
+                    "dependency_client_task_ids": [],
+                },
+                {
+                    "client_task_id": "task_2",
+                    "title": f"registry task {suffix} 2",
+                    "task_type": task_type,
+                    "priority": "medium",
+                    "input_payload": {"text": "beta"},
+                    "expected_output_schema": {"type": "object"},
+                    "dependency_client_task_ids": [],
+                },
+                {
+                    "client_task_id": "task_3",
+                    "title": f"registry task {suffix} 3",
+                    "task_type": task_type,
+                    "priority": "medium",
+                    "input_payload": {"text": "gamma"},
+                    "expected_output_schema": {"type": "object"},
+                    "dependency_client_task_ids": [],
+                },
+            ],
+        },
+    )
+    assert response.status_code == 201
+    return response.json()["tasks"][0]["task_id"]
+
+
+def _insert_runs(task_id: str, agent_role_id: str, run_statuses: list[str]) -> None:
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        for run_status in run_statuses:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO execution_runs (
+                        id,
+                        task_id,
+                        agent_role_id,
+                        run_status,
+                        started_at,
+                        finished_at,
+                        logs,
+                        input_snapshot,
+                        output_snapshot,
+                        error_message,
+                        cancelled_at,
+                        cancel_reason,
+                        token_usage,
+                        latency_ms
+                    ) VALUES (
+                        :id,
+                        :task_id,
+                        :agent_role_id,
+                        :run_status,
+                        NOW(),
+                        NOW(),
+                        ARRAY[]::text[],
+                        '{}'::jsonb,
+                        '{}'::jsonb,
+                        NULL,
+                        NULL,
+                        NULL,
+                        '{}'::jsonb,
+                        100
+                    )
+                    """
+                ),
+                {
+                    "id": f"run_{uuid.uuid4().hex}",
+                    "task_id": task_id,
+                    "agent_role_id": agent_role_id,
+                    "run_status": run_status,
+                },
+            )
+        session.commit()
+
+
+def _seed_registry_history(*, suffix: str, run_statuses: list[str]) -> dict:
+    batch_id = f"batch_{uuid.uuid4().hex}"
+    task_id = f"task_{uuid.uuid4().hex}"
+    role = _register_agent(
+        client,
+        role_name=f"{TEST_ROLE_PREFIX}{suffix}",
+        supported_task_types=["registry_success_case"],
+    )
+    role_id = role["id"]
+    role_name = role["role_name"]
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        session.execute(
+            text(
+                """
+                INSERT INTO task_batches (
+                    id,
+                    title,
+                    description,
+                    created_by,
+                    created_at,
+                    status,
+                    total_tasks,
+                    metadata
+                ) VALUES (
+                    :id,
+                    :title,
+                    :description,
+                    'pytest',
+                    NOW(),
+                    'submitted',
+                    1,
+                    '{}'::jsonb
+                )
+                """
+            ),
+            {
+                "id": batch_id,
+                "title": f"{TEST_BATCH_PREFIX}{suffix}",
+                "description": "registry seeded batch",
+            },
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO tasks (
+                    id,
+                    batch_id,
+                    title,
+                    description,
+                    task_type,
+                    priority,
+                    status,
+                    input_payload,
+                    expected_output_schema,
+                    assigned_agent_role,
+                    dependency_ids,
+                    retry_count,
+                    cancellation_requested,
+                    cancellation_requested_at,
+                    cancellation_reason,
+                    created_at,
+                    updated_at
+                ) VALUES (
+                    :id,
+                    :batch_id,
+                    :title,
+                    :description,
+                    'registry_success_case',
+                    'medium',
+                    'success',
+                    '{}'::jsonb,
+                    '{}'::jsonb,
+                    :assigned_agent_role,
+                    ARRAY[]::varchar[],
+                    0,
+                    FALSE,
+                    NULL,
+                    NULL,
+                    NOW(),
+                    NOW()
+                )
+                """
+            ),
+            {
+                "id": task_id,
+                "batch_id": batch_id,
+                "title": f"registry task {suffix}",
+                "description": "registry seeded task",
+                "assigned_agent_role": role_name,
+            },
+        )
+        for run_status in run_statuses:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO execution_runs (
+                        id,
+                        task_id,
+                        agent_role_id,
+                        run_status,
+                        started_at,
+                        finished_at,
+                        logs,
+                        input_snapshot,
+                        output_snapshot,
+                        error_message,
+                        cancelled_at,
+                        cancel_reason,
+                        token_usage,
+                        latency_ms
+                    ) VALUES (
+                        :id,
+                        :task_id,
+                        :agent_role_id,
+                        :run_status,
+                        NOW(),
+                        NOW(),
+                        ARRAY[]::text[],
+                        '{}'::jsonb,
+                        '{}'::jsonb,
+                        NULL,
+                        NULL,
+                        NULL,
+                        '{}'::jsonb,
+                        100
+                    )
+                    """
+                ),
+                {
+                    "id": f"run_{uuid.uuid4().hex}",
+                    "task_id": task_id,
+                    "agent_role_id": role_id,
+                    "run_status": run_status,
+                },
+            )
+        session.commit()
+
+    return role
+
+
+_cleanup_database()
+
+from src.apps.api.app import app  # noqa: E402
+
+
+client = TestClient(app)
+
+
+def setup_function() -> None:
+    _cleanup_database()
+
+
+def teardown_function() -> None:
+    _cleanup_database()
+
+
+def test_agent_registry_aggregates_run_history_and_success_rate() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role = _seed_registry_history(suffix=suffix, run_statuses=["success", "failed", "cancelled"])
+
+    response = client.get("/agents/registry")
+    assert response.status_code == 200
+    payload = response.json()
+    registry_item = next(item for item in payload["items"] if item["id"] == role["id"])
+
+    assert registry_item["role_name"] == role["role_name"]
+    assert registry_item["total_runs"] == 3
+    assert registry_item["success_runs"] == 1
+    assert registry_item["success_rate"] == 33.33
+
+
+def test_agent_registry_diagnosis_distinguishes_enabled_disabled_and_missing_matches() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    enabled_role = _register_agent(
+        client,
+        role_name=f"{TEST_ROLE_PREFIX}enabled-{suffix}",
+        supported_task_types=["match_enabled_case"],
+    )
+    disabled_role = _register_agent(
+        client,
+        role_name=f"{TEST_ROLE_PREFIX}disabled-{suffix}",
+        supported_task_types=["match_disabled_case"],
+        enabled=False,
+    )
+
+    enabled_response = client.get("/agents/registry", params={"task_type": "match_enabled_case"})
+    assert enabled_response.status_code == 200
+    enabled_diagnosis = enabled_response.json()["diagnosis"]
+    assert enabled_diagnosis["status"] == "matched_enabled"
+    assert enabled_diagnosis["matching_enabled_roles"] == [enabled_role["role_name"]]
+    assert enabled_diagnosis["matching_disabled_roles"] == []
+
+    disabled_response = client.get("/agents/registry", params={"task_type": "match_disabled_case"})
+    assert disabled_response.status_code == 200
+    disabled_diagnosis = disabled_response.json()["diagnosis"]
+    assert disabled_diagnosis["status"] == "matched_disabled_only"
+    assert disabled_diagnosis["matching_enabled_roles"] == []
+    assert disabled_diagnosis["matching_disabled_roles"] == [disabled_role["role_name"]]
+
+    missing_response = client.get("/agents/registry", params={"task_type": "totally_missing_case"})
+    assert missing_response.status_code == 200
+    missing_diagnosis = missing_response.json()["diagnosis"]
+    assert missing_diagnosis["status"] == "no_match"
+    assert missing_diagnosis["matching_enabled_roles"] == []
+    assert missing_diagnosis["matching_disabled_roles"] == []
+
+
+def test_agent_registry_reports_no_run_history_when_role_has_no_runs() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role = _register_agent(
+        client,
+        role_name=f"{TEST_ROLE_PREFIX}no-runs-{suffix}",
+        supported_task_types=["no_runs_case"],
+    )
+
+    response = client.get("/agents/registry")
+    assert response.status_code == 200
+    registry_item = next(item for item in response.json()["items"] if item["id"] == role["id"])
+
+    assert registry_item["total_runs"] == 0
+    assert registry_item["success_runs"] == 0
+    assert registry_item["success_rate"] is None
+
+
+def test_console_agent_registry_page_is_accessible() -> None:
+    response = client.get("/console/agents")
+    assert response.status_code == 200
+    assert "Agent Registry" in response.text
+    assert "/console/assets/agents.js" in response.text
+
+
+def test_agent_registry_assets_include_success_rate_and_diagnosis_copy() -> None:
+    response = client.get("/console/assets/agents.js")
+    assert response.status_code == 200
+    assert "Success rate" in response.text
+    assert "Why no suitable role?" in client.get("/console/agents").text
+    assert "No run history" in response.text

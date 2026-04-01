@@ -238,6 +238,34 @@ class AgentRoleDetailRead(SchemaModel):
     version: str
 
 
+class AgentRegistryListItemRead(SchemaModel):
+    id: str
+    role_name: str
+    description: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    capability_declaration: AgentCapabilityDeclaration
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool
+    version: str
+    total_runs: int = 0
+    success_runs: int = 0
+    success_rate: float | None = None
+
+
+class AgentRegistryDiagnosisRead(SchemaModel):
+    task_type: str
+    status: str
+    message: str
+    matching_enabled_roles: list[str] = Field(default_factory=list)
+    matching_disabled_roles: list[str] = Field(default_factory=list)
+
+
+class AgentRegistryResponse(SchemaModel):
+    items: list[AgentRegistryListItemRead] = Field(default_factory=list)
+    diagnosis: AgentRegistryDiagnosisRead | None = None
+
+
 class AssignmentCreate(SchemaModel):
     task_id: str
     agent_role_id: str
