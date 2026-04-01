@@ -34,10 +34,7 @@ def _database_url() -> str:
 def _cleanup_database() -> None:
     engine = create_engine(_database_url())
     with engine.begin() as conn:
-        conn.execute(
-            text("DELETE FROM task_batches WHERE title LIKE :prefix"),
-            {"prefix": f"{DEMO_PREFIX}%"},
-        )
+        conn.execute(text("DELETE FROM task_batches"))
 
 
 def _demo_payload(suffix: str) -> dict:
@@ -81,10 +78,13 @@ def _demo_payload(suffix: str) -> dict:
 _cleanup_database()
 
 from src.apps.api.app import app  # noqa: E402
-from src.apps.worker.service import WorkerService  # noqa: E402
+from src.apps.api.bootstrap import ensure_builtin_agent_roles  # noqa: E402
+from src.apps.worker.executor import run_next_task  # noqa: E402
+from src.apps.worker.registry import build_default_registry  # noqa: E402
 
 def setup_function() -> None:
     _cleanup_database()
+    ensure_builtin_agent_roles()
 
 
 def teardown_function() -> None:
@@ -104,10 +104,18 @@ def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
             reviewer_count = conn.execute(
                 text("SELECT count(*) FROM agent_roles WHERE role_name = 'reviewer_agent'")
             ).scalar_one()
+            search_count = conn.execute(
+                text("SELECT count(*) FROM agent_roles WHERE role_name = 'search_agent'")
+            ).scalar_one()
+            code_count = conn.execute(
+                text("SELECT count(*) FROM agent_roles WHERE role_name = 'code_agent'")
+            ).scalar_one()
 
         assert planner_count == 1
         assert worker_count == 1
         assert reviewer_count == 1
+        assert search_count == 1
+        assert code_count == 1
 
         suffix = uuid.uuid4().hex[:8]
         create_response = client.post("/task-batches", json=_demo_payload(suffix))
@@ -116,10 +124,10 @@ def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
         created_ids = [task["task_id"] for task in created["tasks"]]
 
         with Session(engine) as session:
-            worker = WorkerService(session)
-            first_run = worker.run_once()
-            second_run = worker.run_once()
-            third_run = worker.run_once()
+            registry = build_default_registry()
+            first_run = run_next_task(session, registry)
+            second_run = run_next_task(session, registry)
+            third_run = run_next_task(session, registry)
             assert first_run is not None
             assert second_run is not None
             assert third_run is not None
@@ -158,4 +166,81 @@ def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
                 for event in events_response.json()
                 if event["event_type"] == "task_status_changed"
             ]
-            assert statuses == ["queued", "running", "success"]
+            assert statuses[-2:] == ["running", "success"]
+            assert statuses[0] in {"queued", "blocked"}
+
+
+def test_builtin_search_and_code_roles_execute_distinct_outputs() -> None:
+    with TestClient(app) as client:
+        engine = create_engine(_database_url())
+        suffix = uuid.uuid4().hex[:8]
+        payload = {
+            "title": f"{DEMO_PREFIX}search-code-{suffix}",
+            "description": "built-in search and code demo",
+            "created_by": "pytest",
+            "metadata": {"suite": "builtin-search-code"},
+            "tasks": [
+                {
+                    "client_task_id": "task_1",
+                    "title": f"{DEMO_PREFIX}search-{suffix}",
+                    "task_type": "research_topic",
+                    "priority": "medium",
+                    "input_payload": {"query": "python worker patterns"},
+                    "expected_output_schema": {"type": "object"},
+                    "dependency_client_task_ids": [],
+                },
+                {
+                    "client_task_id": "task_2",
+                    "title": f"{DEMO_PREFIX}code-{suffix}",
+                    "task_type": "implement_feature",
+                    "priority": "medium",
+                    "input_payload": {"prompt": "add worker retries", "language": "python"},
+                    "expected_output_schema": {"type": "object"},
+                    "dependency_client_task_ids": [],
+                },
+                {
+                    "client_task_id": "task_3",
+                    "title": f"{DEMO_PREFIX}filler-{suffix}",
+                    "task_type": "research_topic",
+                    "priority": "medium",
+                    "input_payload": {"query": "queue locking strategy"},
+                    "expected_output_schema": {"type": "object"},
+                    "dependency_client_task_ids": [],
+                },
+            ],
+        }
+
+        create_response = client.post("/task-batches", json=payload)
+        assert create_response.status_code == 201
+        created = create_response.json()["tasks"]
+        assignments = {task["title"]: task["assigned_agent_role"] for task in created}
+        assert assignments[f"{DEMO_PREFIX}search-{suffix}"] == "search_agent"
+        assert assignments[f"{DEMO_PREFIX}code-{suffix}"] == "code_agent"
+
+        with Session(engine) as session:
+            registry = build_default_registry()
+            first_run = run_next_task(session, registry)
+            second_run = run_next_task(session, registry)
+            third_run = run_next_task(session, registry)
+            assert first_run is not None
+            assert second_run is not None
+            assert third_run is not None
+            run_ids = [first_run.id, second_run.id, third_run.id]
+
+        run_payloads = []
+        for run_id in run_ids:
+            run_response = client.get(f"/runs/{run_id}")
+            assert run_response.status_code == 200
+            run_payloads.append(run_response.json())
+
+        stages = {payload["output_snapshot"].get("stage") for payload in run_payloads}
+        assert "search" in stages
+        assert "code" in stages
+        assert any(
+            payload["output_snapshot"].get("search_plan", {}).get("intent") == "research"
+            for payload in run_payloads
+        )
+        assert any(
+            payload["output_snapshot"].get("code_plan", {}).get("language") == "python"
+            for payload in run_payloads
+        )

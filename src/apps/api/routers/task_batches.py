@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections import deque
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,6 +24,8 @@ from src.packages.core.schemas import (
     BatchCountsRead,
     BatchProgressRead,
     BatchTaskResultRead,
+    TaskBatchListItemRead,
+    TaskBatchListResponse,
     TaskBatchRead,
     TaskBatchSummaryRead,
     TaskBatchSubmitRequest,
@@ -32,6 +36,10 @@ from src.packages.core.task_state_machine import transition_task_status
 from src.packages.router import route_task
 
 router = APIRouter(prefix="/task-batches", tags=["task-batches"])
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _build_batch_counts(tasks: list[TaskORM]) -> BatchCountsRead:
@@ -130,6 +138,32 @@ def _load_batch_artifacts(task_ids: list[str], db: Session) -> tuple[list[Artifa
         if artifact.task_id is not None:
             artifact_counts[artifact.task_id] = artifact_counts.get(artifact.task_id, 0) + 1
     return artifacts, artifact_counts
+
+
+def _batch_updated_at(task_batch: TaskBatchORM, tasks: list[TaskORM]) -> datetime:
+    if not tasks:
+        return task_batch.created_at
+    return max(task.updated_at for task in tasks)
+
+
+def _build_batch_list_item(task_batch: TaskBatchORM, tasks: list[TaskORM]) -> TaskBatchListItemRead:
+    counts = _build_batch_counts(tasks)
+    progress = _build_batch_progress(tasks)
+    total_tasks = task_batch.total_tasks or len(tasks)
+    success_rate = 0.0 if total_tasks == 0 else round((counts.success_count / total_tasks) * 100, 2)
+    return TaskBatchListItemRead(
+        batch_id=task_batch.id,
+        title=task_batch.title,
+        created_at=task_batch.created_at,
+        updated_at=_batch_updated_at(task_batch, tasks),
+        total_tasks=total_tasks,
+        derived_status=_derive_batch_status(tasks),
+        success_rate=success_rate,
+        completed_count=progress.completed_count,
+        success_count=counts.success_count,
+        failed_count=counts.failed_count,
+        cancelled_count=counts.cancelled_count,
+    )
 
 
 def _validate_unique_client_task_ids(payload: TaskBatchSubmitRequest) -> None:
@@ -337,6 +371,55 @@ def create_task_batch(
     except Exception:
         db.rollback()
         raise
+
+
+@router.get("", response_model=TaskBatchListResponse)
+def list_task_batches(
+    status_filter: str | None = Query(default=None, alias="status"),
+    search: str | None = None,
+    sort: str = "created_at_desc",
+    db: Session = Depends(get_db),
+) -> TaskBatchListResponse:
+    query = select(TaskBatchORM)
+
+    if search:
+        query = query.where(TaskBatchORM.title.ilike(f"%{search.strip()}%"))
+
+    sort_mapping = {
+        "created_at_desc": TaskBatchORM.created_at.desc(),
+        "created_at_asc": TaskBatchORM.created_at.asc(),
+        "updated_at_desc": TaskBatchORM.created_at.desc(),
+        "updated_at_asc": TaskBatchORM.created_at.asc(),
+    }
+    batches = db.scalars(query.order_by(sort_mapping.get(sort, TaskBatchORM.created_at.desc()))).all()
+    if not batches:
+        return TaskBatchListResponse(items=[])
+
+    batch_ids = [batch.id for batch in batches]
+    tasks = db.scalars(
+        select(TaskORM)
+        .where(TaskORM.batch_id.in_(batch_ids))
+        .order_by(TaskORM.created_at.asc(), TaskORM.id.asc())
+    ).all()
+
+    tasks_by_batch: dict[str, list[TaskORM]] = {batch_id: [] for batch_id in batch_ids}
+    for task in tasks:
+        tasks_by_batch.setdefault(task.batch_id, []).append(task)
+
+    items = [
+        _build_batch_list_item(task_batch, tasks_by_batch.get(task_batch.id, []))
+        for task_batch in batches
+    ]
+
+    if status_filter:
+        items = [item for item in items if item.derived_status == status_filter]
+
+    if sort == "updated_at_desc":
+        items.sort(key=lambda item: item.updated_at, reverse=True)
+    elif sort == "updated_at_asc":
+        items.sort(key=lambda item: item.updated_at)
+
+    return TaskBatchListResponse(items=items)
 
 
 @router.get("/{batch_id}", response_model=TaskBatchRead)

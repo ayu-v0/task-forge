@@ -9,6 +9,35 @@ from src.packages.core.db.models import AgentRoleORM
 
 BUILTIN_ROLES: tuple[dict, ...] = (
     {
+        "role_name": "search_agent",
+        "description": "Built-in search agent for research-oriented tasks",
+        "capabilities": ["task:search", "task:research_topic"],
+        "input_schema": {
+            "supported_task_types": [],
+            "input_requirements": {"properties": {"query": {"type": "string"}}},
+            "supports_concurrency": True,
+            "allows_auto_retry": False,
+        },
+        "output_schema": {"output_contract": {"type": "object"}},
+    },
+    {
+        "role_name": "code_agent",
+        "description": "Built-in code agent for implementation-oriented tasks",
+        "capabilities": ["task:code", "task:implement_feature"],
+        "input_schema": {
+            "supported_task_types": [],
+            "input_requirements": {
+                "properties": {
+                    "prompt": {"type": "string"},
+                    "language": {"type": "string"},
+                }
+            },
+            "supports_concurrency": True,
+            "allows_auto_retry": False,
+        },
+        "output_schema": {"output_contract": {"type": "object"}},
+    },
+    {
         "role_name": "planner_agent",
         "description": "Built-in planner for demo preprocessing",
         "capabilities": ["task:planner_preprocess"],

@@ -5,11 +5,13 @@ from src.packages.sdk.base_agent import BaseAgent
 from src.packages.core.db.models import TaskORM
 
 from src.apps.worker.builtin_agents import (
+    CodeWorkerAgent,
     DefaultWorkerAgent as BuiltinDefaultWorkerAgent,
     EchoWorkerAgent,
     FailingWorkerAgent,
     PlannerWorkerAgent,
     ReviewerWorkerAgent,
+    SearchWorkerAgent,
     WorkerAgent,
 )
 
@@ -47,12 +49,21 @@ class AgentRegistry:
 def build_default_registry() -> AgentRegistry:
     registry = AgentRegistry()
     registry.register("default_worker", DefaultWorkerAgent())
+    registry.register("search_agent", SearchWorkerAgent())
+    registry.register("code_agent", CodeWorkerAgent())
+    registry.register("planner_agent", PlannerWorkerAgent())
+    registry.register("worker_agent", BuiltinDefaultWorkerAgent())
+    registry.register("reviewer_agent", ReviewerWorkerAgent())
+    registry.register("echo_worker", EchoWorkerAgent())
+    registry.register("failing_worker", FailingWorkerAgent())
     return registry
 
 
 def get_worker_agent(role_name: str) -> WorkerAgent:
     agents: dict[str, WorkerAgent] = {
         "default_worker": EchoWorkerAgent(),
+        "search_agent": SearchWorkerAgent(),
+        "code_agent": CodeWorkerAgent(),
         "echo_worker": EchoWorkerAgent(),
         "failing_worker": FailingWorkerAgent(),
         "planner_agent": PlannerWorkerAgent(),

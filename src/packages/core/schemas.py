@@ -123,6 +123,24 @@ class TaskBatchSummaryRead(SchemaModel):
     artifacts: list[BatchArtifactRead]
 
 
+class TaskBatchListItemRead(SchemaModel):
+    batch_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    total_tasks: int
+    derived_status: str
+    success_rate: float
+    completed_count: int
+    success_count: int
+    failed_count: int
+    cancelled_count: int
+
+
+class TaskBatchListResponse(SchemaModel):
+    items: list[TaskBatchListItemRead] = Field(default_factory=list)
+
+
 class TaskCreate(SchemaModel):
     batch_id: str
     title: str
