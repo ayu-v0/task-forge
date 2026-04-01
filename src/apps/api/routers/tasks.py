@@ -12,8 +12,10 @@ from src.packages.core.schemas import (
     TaskCancelRequest,
     TaskEventRead,
     TaskRead,
+    TaskTimelineRead,
     TaskStatusHistoryItemRead,
 )
+from src.packages.core.timeline import load_task_timeline
 from src.packages.core.task_state_machine import TaskStatusTransitionError, transition_task_status
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -70,6 +72,14 @@ def get_task_status_history(task_id: str, db: Session = Depends(get_db)) -> list
         )
         for event in events
     ]
+
+
+@router.get("/{task_id}/timeline", response_model=TaskTimelineRead)
+def get_task_timeline(task_id: str, db: Session = Depends(get_db)) -> TaskTimelineRead:
+    timeline = load_task_timeline(db, task_id)
+    if timeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    return timeline
 
 
 @router.post("/{task_id}/cancel", response_model=TaskRead)

@@ -7,6 +7,7 @@ const overviewMetrics = document.getElementById("overview-metrics");
 const riskGroups = document.getElementById("risk-groups");
 const dependencyMap = document.getElementById("dependency-map");
 const artifactList = document.getElementById("artifact-list");
+const timelineList = document.getElementById("timeline-list");
 const taskGrid = document.getElementById("task-grid");
 
 function formatDate(value) {
@@ -162,6 +163,33 @@ function renderArtifacts(artifacts) {
     .join("");
 }
 
+function renderTimeline(items) {
+  if (!items.length) {
+    timelineList.innerHTML = `<article class="empty-state">No execution timeline available for this batch.</article>`;
+    return;
+  }
+
+  timelineList.innerHTML = items
+    .map(
+      (item) => `
+        <article class="timeline-entry">
+          <div class="timeline-head">
+            <strong>${escapeHtml(item.title)}</strong>
+            <span class="timeline-stage">${escapeHtml(item.stage)}</span>
+          </div>
+          <p>${escapeHtml(item.detail ?? "No additional detail.")}</p>
+          <p class="timeline-meta">
+            ${escapeHtml(formatDate(item.timestamp))}
+            · task ${escapeHtml(item.task_id ?? "batch")}
+            · run ${escapeHtml(item.run_id ?? "n/a")}
+            · actor ${escapeHtml(item.actor ?? "system")}
+          </p>
+        </article>
+      `,
+    )
+    .join("");
+}
+
 function taskFlags(task) {
   const flags = [];
   if (task.status === "needs_review") {
@@ -255,6 +283,7 @@ function renderError(message) {
   riskGroups.innerHTML = `<div class="empty-panel">${escapeHtml(message)}</div>`;
   dependencyMap.innerHTML = `<div class="empty-panel">${escapeHtml(message)}</div>`;
   artifactList.innerHTML = `<div class="empty-panel">${escapeHtml(message)}</div>`;
+  timelineList.innerHTML = `<article class="empty-state">${escapeHtml(message)}</article>`;
   taskGrid.innerHTML = `<article class="empty-state">${escapeHtml(message)}</article>`;
 }
 
@@ -268,20 +297,30 @@ async function loadBatchDetail() {
   statusText.textContent = "Loading batch summary...";
 
   try {
-    const response = await fetch(`/task-batches/${batchId}/summary`);
-    if (response.status === 404) {
+    const [summaryResponse, timelineResponse] = await Promise.all([
+      fetch(`/task-batches/${batchId}/summary`),
+      fetch(`/task-batches/${batchId}/timeline`),
+    ]);
+    if (summaryResponse.status === 404 || timelineResponse.status === 404) {
       throw new Error("Batch not found.");
     }
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`);
+    if (!summaryResponse.ok) {
+      throw new Error(`Summary request failed with status ${summaryResponse.status}`);
+    }
+    if (!timelineResponse.ok) {
+      throw new Error(`Timeline request failed with status ${timelineResponse.status}`);
     }
 
-    const summary = await response.json();
+    const [summary, timeline] = await Promise.all([
+      summaryResponse.json(),
+      timelineResponse.json(),
+    ]);
     statusText.textContent = `Batch ${summary.batch.id} is currently ${summary.derived_status}.`;
     renderOverview(summary);
     renderRiskGroups(summary.tasks);
     renderDependencyMap(summary.tasks);
     renderArtifacts(summary.artifacts);
+    renderTimeline(timeline.items);
     renderTasks(summary.tasks);
   } catch (error) {
     renderError(error.message);

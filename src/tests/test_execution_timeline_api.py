@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 
 ROOT = Path(__file__).resolve().parents[2]
-TEST_PREFIX = "run-detail-test-"
+TEST_PREFIX = "execution-timeline-test-"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -28,14 +28,14 @@ def _database_url() -> str:
 def _cleanup_database() -> None:
     engine = create_engine(_database_url())
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM task_batches"))
-        conn.execute(text("DELETE FROM agent_roles"))
+        conn.execute(text("DELETE FROM task_batches WHERE title LIKE :prefix"), {"prefix": f"{TEST_PREFIX}%"})
+        conn.execute(text("DELETE FROM agent_roles WHERE role_name LIKE :prefix"), {"prefix": f"{TEST_PREFIX}%"})
 
 
 def _register_agent(client: TestClient, *, role_name: str, supported_task_types: list[str]) -> dict:
     payload = {
         "role_name": role_name,
-        "description": "run detail role",
+        "description": "timeline role",
         "capabilities": [f"task:{role_name}"],
         "capability_declaration": {
             "supported_task_types": supported_task_types,
@@ -52,20 +52,16 @@ def _register_agent(client: TestClient, *, role_name: str, supported_task_types:
         "version": "1.0.0",
     }
     response = client.post("/agents/register", json=payload)
-    assert response.status_code in {201, 400}
-    if response.status_code == 400:
-        roles_response = client.get("/agents")
-        assert roles_response.status_code == 200
-        return next(role for role in roles_response.json() if role["role_name"] == role_name)
+    assert response.status_code == 201
     return response.json()
 
 
 def _batch_payload(task_type: str, suffix: str) -> dict:
     return {
         "title": f"{TEST_PREFIX}batch-{suffix}",
-        "description": "run detail batch",
+        "description": "timeline batch",
         "created_by": "pytest",
-        "metadata": {"suite": "run-detail"},
+        "metadata": {"suite": "execution-timeline"},
         "tasks": [
             {
                 "client_task_id": "task_1",
@@ -102,6 +98,7 @@ _cleanup_database()
 
 from src.apps.api.app import app  # noqa: E402
 from src.packages.core.db.models import AssignmentORM, EventLogORM, ExecutionRunORM, TaskORM  # noqa: E402
+from src.packages.core.task_state_machine import transition_task_status  # noqa: E402
 
 
 client = TestClient(app)
@@ -115,10 +112,9 @@ def teardown_function() -> None:
     _cleanup_database()
 
 
-def test_run_detail_endpoint_returns_routing_and_retry_history() -> None:
+def test_task_timeline_rebuilds_full_lifecycle_with_retry() -> None:
     suffix = uuid.uuid4().hex[:8]
-    role_name = f"{TEST_PREFIX}worker-{suffix}"
-    _register_agent(client, role_name=role_name, supported_task_types=["generate"])
+    role = _register_agent(client, role_name=f"{TEST_PREFIX}worker-{suffix}", supported_task_types=["generate"])
     response = client.post("/task-batches", json=_batch_payload("generate", suffix))
     assert response.status_code == 201
     task_id = response.json()["tasks"][0]["task_id"]
@@ -129,34 +125,41 @@ def test_run_detail_endpoint_returns_routing_and_retry_history() -> None:
         assert task is not None
         assignment = session.query(AssignmentORM).filter(AssignmentORM.task_id == task.id).first()
         assert assignment is not None
-        base_time = datetime.now(timezone.utc)
         first_run = ExecutionRunORM(
             task_id=task.id,
             agent_role_id=assignment.agent_role_id,
             run_status="failed",
-            started_at=base_time,
-            finished_at=base_time + timedelta(seconds=1),
+            started_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+            error_message="first attempt failed",
             input_snapshot={"attempt": 1},
             output_snapshot={},
-            logs=["compile started", "compile failed"],
-            error_message="first failure",
-            token_usage={"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
-            latency_ms=1000,
         )
+        session.add(first_run)
+        session.flush()
+        session.add(
+            EventLogORM(
+                batch_id=task.batch_id,
+                task_id=task.id,
+                run_id=first_run.id,
+                event_type="execution_run_started",
+                event_status="running",
+                message="worker started execution run",
+                payload={"task_id": task.id, "run_id": first_run.id, "source": "worker"},
+            )
+        )
+        transition_task_status(session, task, "running", "worker claimed queued task", "worker", run_id=first_run.id)
+        transition_task_status(session, task, "failed", "worker execution failed", "worker", run_id=first_run.id)
+        transition_task_status(session, task, "queued", "retry requested", "review")
         second_run = ExecutionRunORM(
             task_id=task.id,
             agent_role_id=assignment.agent_role_id,
             run_status="success",
-            started_at=base_time + timedelta(seconds=2),
-            finished_at=base_time + timedelta(seconds=3),
+            started_at=datetime.now(timezone.utc) + timedelta(seconds=2),
+            finished_at=datetime.now(timezone.utc) + timedelta(seconds=3),
             input_snapshot={"attempt": 2},
             output_snapshot={"artifact": "report"},
-            logs=["compile started", "compile succeeded"],
-            token_usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-            latency_ms=900,
         )
-        session.add(first_run)
-        session.flush()
         session.add(second_run)
         session.flush()
         session.add(
@@ -164,81 +167,49 @@ def test_run_detail_endpoint_returns_routing_and_retry_history() -> None:
                 batch_id=task.batch_id,
                 task_id=task.id,
                 run_id=second_run.id,
-                event_type="run_completed",
+                event_type="execution_run_finished",
                 event_status="success",
-                message="completed",
-                payload={"run_id": second_run.id},
+                message="worker completed execution run",
+                payload={"task_id": task.id, "run_id": second_run.id, "source": "worker"},
             )
         )
+        transition_task_status(session, task, "running", "worker claimed queued task", "worker", run_id=second_run.id)
+        transition_task_status(session, task, "success", "worker finished task successfully", "worker", run_id=second_run.id)
         session.commit()
-        run_id = second_run.id
 
-    detail_response = client.get(f"/runs/{run_id}/detail")
-    assert detail_response.status_code == 200
-    payload = detail_response.json()
-    assert payload["run"]["id"] == run_id
-    assert payload["task"]["task_id"] == task_id
-    assert payload["routing"]["agent_role_name"] == role_name
-    assert payload["routing"]["routing_reason"] == "matched by task_type=generate"
-    assert [item["run_status"] for item in payload["retry_history"]] == ["success", "failed"]
-    assert payload["retry_history"][0]["is_current"] is True
-    assert payload["run"]["token_usage"]["total_tokens"] == 8
-    assert payload["events"][-1]["event_type"] == "run_completed"
+    timeline_response = client.get(f"/tasks/{task_id}/timeline")
+    assert timeline_response.status_code == 200
+    payload = timeline_response.json()
+    stages = [item["stage"] for item in payload["items"]]
+    assert stages[0] == "created"
+    assert "routed" in stages
+    assert "queued" in stages
+    assert "running" in stages
+    assert "failed" in stages
+    assert "retry" in stages
+    assert "completed" in stages
 
 
-def test_run_detail_endpoint_handles_cancelled_run_without_logs() -> None:
+def test_task_timeline_includes_review_stage_and_batch_timeline_merges_task_events() -> None:
     suffix = uuid.uuid4().hex[:8]
-    _register_agent(client, role_name="default_worker", supported_task_types=[])
     response = client.post("/task-batches", json=_batch_payload("unmatched_type", suffix))
     assert response.status_code == 201
+    batch_id = response.json()["batch_id"]
     task_id = response.json()["tasks"][0]["task_id"]
 
-    engine = create_engine(_database_url())
-    with Session(engine) as session:
-        task = session.get(TaskORM, task_id)
-        assert task is not None
-        assignment = session.query(AssignmentORM).filter(AssignmentORM.task_id == task.id).first()
-        assert assignment is not None
-        run = ExecutionRunORM(
-            task_id=task.id,
-            agent_role_id=assignment.agent_role_id,
-            run_status="cancelled",
-            cancel_reason="user requested cancellation",
-            input_snapshot={"attempt": 1},
-            output_snapshot={},
-            logs=[],
-            latency_ms=None,
-        )
-        session.add(run)
-        session.commit()
-        run_id = run.id
+    task_timeline = client.get(f"/tasks/{task_id}/timeline")
+    assert task_timeline.status_code == 200
+    task_stages = [item["stage"] for item in task_timeline.json()["items"]]
+    assert "review" in task_stages
 
-    detail_response = client.get(f"/runs/{run_id}/detail")
-    assert detail_response.status_code == 200
-    payload = detail_response.json()
-    assert payload["run"]["run_status"] == "cancelled"
-    assert payload["run"]["cancel_reason"] == "user requested cancellation"
-    assert payload["run"]["logs"] == []
+    batch_timeline = client.get(f"/task-batches/{batch_id}/timeline")
+    assert batch_timeline.status_code == 200
+    items = batch_timeline.json()["items"]
+    assert items[0]["title"] == "Batch created"
+    assert any(item["task_id"] == task_id for item in items)
+    assert any(item["stage"] == "review" for item in items)
 
 
-def test_console_run_detail_page_is_accessible() -> None:
-    response = client.get("/console/runs/sample-run-id")
-    assert response.status_code == 200
-    assert "Run Detail" in response.text
-    assert "/console/assets/run-detail.js" in response.text
-
-
-def test_run_detail_page_assets_include_task_lifecycle_timeline() -> None:
-    page_response = client.get("/console/runs/sample-run-id")
-    assert page_response.status_code == 200
-    assert "Lifecycle timeline" in page_response.text
-
-    asset_response = client.get("/console/assets/run-detail.js")
-    assert asset_response.status_code == 200
-    assert "/tasks/${detail.task.task_id}/timeline" in asset_response.text
-
-
-def test_batch_detail_assets_link_to_run_detail_page() -> None:
-    response = client.get("/console/assets/batch-detail.js")
-    assert response.status_code == 200
-    assert "/console/runs/" in response.text
+def test_timeline_endpoints_return_404_for_unknown_resources() -> None:
+    assert client.get("/tasks/not_found/timeline").status_code == 404
+    assert client.get("/task-batches/not_found/timeline").status_code == 404

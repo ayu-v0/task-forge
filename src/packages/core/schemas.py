@@ -184,6 +184,29 @@ class TaskStatusHistoryItemRead(SchemaModel):
     actor: str | None = None
 
 
+class TimelineItemRead(SchemaModel):
+    timestamp: datetime
+    stage: str
+    title: str
+    detail: str | None = None
+    task_id: str | None = None
+    run_id: str | None = None
+    status: str | None = None
+    actor: str | None = None
+
+
+class TaskTimelineRead(SchemaModel):
+    task_id: str
+    batch_id: str
+    items: list[TimelineItemRead] = Field(default_factory=list)
+
+
+class BatchTimelineRead(SchemaModel):
+    batch_id: str
+    title: str
+    items: list[TimelineItemRead] = Field(default_factory=list)
+
+
 class AgentRoleCreate(SchemaModel):
     role_name: str
     description: str | None = None

@@ -20,6 +20,7 @@ from src.packages.core.db.models import (
     TaskORM,
 )
 from src.packages.core.schemas import (
+    BatchTimelineRead,
     BatchArtifactRead,
     BatchCountsRead,
     BatchProgressRead,
@@ -32,6 +33,7 @@ from src.packages.core.schemas import (
     TaskBatchSubmitResponse,
     TaskBatchSubmitTaskRead,
 )
+from src.packages.core.timeline import load_batch_timeline
 from src.packages.core.task_state_machine import transition_task_status
 from src.packages.router import route_task
 
@@ -428,6 +430,14 @@ def get_task_batch(batch_id: str, db: Session = Depends(get_db)) -> TaskBatchRea
     if task_batch is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task batch not found")
     return TaskBatchRead.model_validate(task_batch)
+
+
+@router.get("/{batch_id}/timeline", response_model=BatchTimelineRead)
+def get_task_batch_timeline(batch_id: str, db: Session = Depends(get_db)) -> BatchTimelineRead:
+    timeline = load_batch_timeline(db, batch_id)
+    if timeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task batch not found")
+    return timeline
 
 
 @router.get("/{batch_id}/summary", response_model=TaskBatchSummaryRead)
