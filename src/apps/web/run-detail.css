@@ -1,0 +1,84 @@
+@import url("/console/assets/batch-detail.css");
+
+.run-shell {
+  max-width: 1320px;
+}
+
+.back-links {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.detail-stack,
+.log-list,
+.history-list,
+.event-list {
+  display: grid;
+  gap: 12px;
+}
+
+.json-block,
+.log-entry,
+.history-entry,
+.event-entry,
+.detail-entry,
+.error-entry,
+.empty-panel {
+  padding: 14px;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+
+.json-block {
+  margin: 0;
+  min-height: 180px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Courier New", monospace;
+  font-size: 0.88rem;
+  color: var(--ink);
+}
+
+.detail-entry strong,
+.history-entry strong,
+.event-entry strong,
+.error-entry strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.error-entry.failed {
+  border-color: rgba(164, 63, 47, 0.35);
+  background: var(--danger-soft);
+}
+
+.error-entry.cancelled {
+  border-color: rgba(37, 90, 138, 0.24);
+  background: rgba(219, 232, 244, 0.72);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.history-entry.current {
+  border-color: rgba(25, 76, 61, 0.35);
+  box-shadow: 0 10px 24px rgba(25, 76, 61, 0.08);
+}
+
+.history-meta,
+.event-meta,
+.log-meta {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.log-entry p,
+.event-entry p,
+.history-entry p,
+.detail-entry p,
+.error-entry p {
+  margin: 0;
+}

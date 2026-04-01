@@ -208,6 +208,11 @@ function renderTasks(tasks) {
                 <span class="meta-pill">latest run ${escapeHtml(task.latest_run_status ?? "not started")}</span>
                 <span class="meta-pill">${escapeHtml(task.artifact_count)} artifacts</span>
               </div>
+              ${
+                task.latest_run_id
+                  ? `<p class="detail-link-row"><a class="detail-link" href="/console/runs/${escapeHtml(task.latest_run_id)}">View run detail</a></p>`
+                  : ""
+              }
             </section>
             <section class="detail-block">
               <strong>Dependencies</strong>

@@ -138,6 +138,12 @@ def test_console_batch_detail_page_is_accessible() -> None:
     assert "/console/assets/batch-detail.js" in response.text
 
 
+def test_batch_detail_page_can_link_to_run_detail_when_latest_run_exists() -> None:
+    response = client.get("/console/assets/batch-detail.js")
+    assert response.status_code == 200
+    assert "View run detail" in response.text
+
+
 def test_batch_detail_summary_supports_mixed_risk_sections() -> None:
     suffix = uuid.uuid4().hex[:8]
     _register_agent(client, role_name="default_worker", supported_task_types=[])

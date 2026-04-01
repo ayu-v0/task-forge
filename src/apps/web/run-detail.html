@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Run Detail</title>
+  <link rel="stylesheet" href="/console/assets/run-detail.css">
+</head>
+<body>
+  <main class="page-shell run-shell">
+    <section class="hero">
+      <p class="eyebrow">Operations Console</p>
+      <div class="hero-row">
+        <div>
+          <div class="back-links">
+            <a id="back-to-batch" class="back-link" href="/console/batches">Back to batch</a>
+            <a class="back-link" href="/console/batches">Back to batches</a>
+          </div>
+          <h1 id="run-title">Run Detail</h1>
+          <p id="run-subtitle" class="subtitle">Loading run detail...</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="status-row">
+      <p id="status-text">Loading run detail...</p>
+    </section>
+
+    <section class="overview-grid">
+      <article class="batch-card overview-card">
+        <div class="card-top">
+          <div>
+            <p class="section-label">Run overview</p>
+            <h2 id="overview-heading">Current execution</h2>
+          </div>
+          <span id="overview-status" class="status-badge status-pending">pending</span>
+        </div>
+        <dl id="overview-metrics" class="metrics"></dl>
+      </article>
+
+      <article class="batch-card">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">Routing context</p>
+            <h2>Why this role</h2>
+          </div>
+        </div>
+        <div id="routing-panel" class="detail-stack"></div>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <article class="batch-card">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">Input snapshot</p>
+            <h2>Request payload</h2>
+          </div>
+        </div>
+        <pre id="input-snapshot" class="json-block">Loading...</pre>
+      </article>
+
+      <article class="batch-card">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">Output snapshot</p>
+            <h2>Execution result</h2>
+          </div>
+        </div>
+        <pre id="output-snapshot" class="json-block">Loading...</pre>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <article class="batch-card">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">Logs & errors</p>
+            <h2>Failure diagnosis</h2>
+          </div>
+        </div>
+        <div id="error-panel" class="detail-stack"></div>
+        <div id="log-list" class="log-list"></div>
+      </article>
+
+      <article class="batch-card">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">Retry history</p>
+            <h2>Previous attempts</h2>
+          </div>
+        </div>
+        <div id="retry-history" class="history-list"></div>
+      </article>
+    </section>
+
+    <section class="task-section">
+      <div class="section-heading">
+        <div>
+          <p class="section-label">Task events</p>
+          <h2>Timeline</h2>
+        </div>
+      </div>
+      <section id="event-list" class="event-list"></section>
+    </section>
+  </main>
+
+  <script src="/console/assets/run-detail.js"></script>
+</body>
+</html>

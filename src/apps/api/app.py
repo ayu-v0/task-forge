@@ -44,6 +44,11 @@ def console_batch_detail(batch_id: str) -> FileResponse:
     return FileResponse(WEB_DIR / "batch-detail.html")
 
 
+@app.get("/console/runs/{run_id}")
+def console_run_detail(run_id: str) -> FileResponse:
+    return FileResponse(WEB_DIR / "run-detail.html")
+
+
 @app.on_event("startup")
 def bootstrap_defaults() -> None:
     ensure_builtin_agent_roles()
