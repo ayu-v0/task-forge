@@ -7,6 +7,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
+
+from src.packages.core.db.models import ExecutionRunORM
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,7 +40,13 @@ def _cleanup_database() -> None:
         conn.execute(text("DELETE FROM agent_roles"))
 
 
-def _batch_payload(task_type: str, suffix: str) -> dict:
+def _batch_payload(
+    task_type: str,
+    suffix: str,
+    *,
+    input_payload: dict | None = None,
+    expected_output_schema: dict | None = None,
+) -> dict:
     return {
         "title": f"{ROUTING_PREFIX}batch-{suffix}",
         "description": "routing batch",
@@ -49,8 +58,8 @@ def _batch_payload(task_type: str, suffix: str) -> dict:
                 "title": f"{ROUTING_PREFIX}task-{suffix}-1",
                 "task_type": task_type,
                 "priority": "medium",
-                "input_payload": {"text": "hello"},
-                "expected_output_schema": {"type": "object"},
+                "input_payload": input_payload or {"text": "hello"},
+                "expected_output_schema": expected_output_schema or {"type": "object"},
                 "dependency_client_task_ids": [],
             },
             {
@@ -58,8 +67,8 @@ def _batch_payload(task_type: str, suffix: str) -> dict:
                 "title": f"{ROUTING_PREFIX}task-{suffix}-2",
                 "task_type": task_type,
                 "priority": "medium",
-                "input_payload": {"text": "world"},
-                "expected_output_schema": {"type": "object"},
+                "input_payload": input_payload or {"text": "world"},
+                "expected_output_schema": expected_output_schema or {"type": "object"},
                 "dependency_client_task_ids": [],
             },
             {
@@ -67,8 +76,8 @@ def _batch_payload(task_type: str, suffix: str) -> dict:
                 "title": f"{ROUTING_PREFIX}task-{suffix}-3",
                 "task_type": task_type,
                 "priority": "medium",
-                "input_payload": {"text": "!"},
-                "expected_output_schema": {"type": "object"},
+                "input_payload": input_payload or {"text": "!"},
+                "expected_output_schema": expected_output_schema or {"type": "object"},
                 "dependency_client_task_ids": [],
             },
         ],
@@ -84,6 +93,7 @@ def _register_agent(
     input_properties: dict | None = None,
     output_type: str = "object",
     declare_schema: bool = True,
+    timeout_seconds: int = 300,
 ) -> dict:
     input_requirements = {"properties": input_properties or {"text": {"type": "string"}}}
     output_contract = {"type": output_type}
@@ -105,7 +115,7 @@ def _register_agent(
         },
         "input_schema": {},
         "output_schema": {},
-        "timeout_seconds": 300,
+        "timeout_seconds": timeout_seconds,
         "max_retries": 1,
         "enabled": True,
         "version": "1.0.0",
@@ -118,6 +128,112 @@ def _register_agent(
         assert roles_response.status_code == 200
         return next(role for role in roles_response.json() if role["role_name"] == role_name)
     return response.json()
+
+
+def _seed_history(role_id: str, role_name: str, *, run_statuses: list[str], suffix: str, prompt_tokens: int = 10, completion_tokens: int = 5, latency_ms: int = 100) -> None:
+    batch_id = f"batch_{uuid.uuid4().hex}"
+    task_id = f"task_{uuid.uuid4().hex}"
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        session.execute(
+            text(
+                """
+                INSERT INTO task_batches (
+                    id,
+                    title,
+                    description,
+                    created_by,
+                    created_at,
+                    status,
+                    total_tasks,
+                    metadata
+                ) VALUES (
+                    :id,
+                    :title,
+                    :description,
+                    'pytest',
+                    NOW(),
+                    'submitted',
+                    1,
+                    '{}'::jsonb
+                )
+                """
+            ),
+            {
+                "id": batch_id,
+                "title": f"{ROUTING_PREFIX}history-batch-{suffix}-{role_name}",
+                "description": "routing seeded batch",
+            },
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO tasks (
+                    id,
+                    batch_id,
+                    title,
+                    description,
+                    task_type,
+                    priority,
+                    status,
+                    input_payload,
+                    expected_output_schema,
+                    assigned_agent_role,
+                    dependency_ids,
+                    retry_count,
+                    cancellation_requested,
+                    cancellation_requested_at,
+                    cancellation_reason,
+                    created_at,
+                    updated_at
+                ) VALUES (
+                    :id,
+                    :batch_id,
+                    :title,
+                    :description,
+                    'generate',
+                    'medium',
+                    'success',
+                    '{}'::jsonb,
+                    '{}'::jsonb,
+                    :assigned_agent_role,
+                    ARRAY[]::varchar[],
+                    0,
+                    FALSE,
+                    NULL,
+                    NULL,
+                    NOW(),
+                    NOW()
+                )
+                """
+            ),
+            {
+                "id": task_id,
+                "batch_id": batch_id,
+                "title": f"{ROUTING_PREFIX}history-task-{suffix}-{role_name}",
+                "description": "routing seeded task",
+                "assigned_agent_role": role_name,
+            },
+        )
+        for index, run_status in enumerate(run_statuses, start=1):
+            session.add(
+                ExecutionRunORM(
+                    id=f"run_{uuid.uuid4().hex}",
+                    task_id=task_id,
+                    agent_role_id=role_id,
+                    run_status=run_status,
+                    logs=[],
+                    input_snapshot={},
+                    output_snapshot={},
+                    token_usage={
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens,
+                    },
+                    latency_ms=latency_ms * index,
+                )
+            )
+        session.commit()
 
 
 _cleanup_database()
@@ -152,7 +268,8 @@ def test_routes_tasks_by_exact_task_type() -> None:
     assert response.status_code == 201
     tasks = response.json()["tasks"]
     assert all(task["assigned_agent_role"] == role["role_name"] for task in tasks)
-    assert all(task["routing_reason"] == "matched by task_type=generate" for task in tasks)
+    assert all("capability-ranked route selected role=" in task["routing_reason"] for task in tasks)
+    assert all("via task_type,capability,schema" in task["routing_reason"] for task in tasks)
     assert all(task["status"] == "queued" for task in tasks)
 
 
@@ -170,23 +287,129 @@ def test_routes_tasks_by_capability_when_task_type_not_declared() -> None:
     assert response.status_code == 201
     tasks = response.json()["tasks"]
     assert all(task["assigned_agent_role"] == role["role_name"] for task in tasks)
-    assert all(task["routing_reason"] == "matched by capability=task:write_summary" for task in tasks)
+    assert all("via capability,schema" in task["routing_reason"] for task in tasks)
 
 
 def test_routes_builtin_search_and_code_roles_by_capability() -> None:
     suffix = uuid.uuid4().hex[:8]
 
-    search_response = client.post("/task-batches", json=_batch_payload("research_topic", f"{suffix}-search"))
+    search_response = client.post(
+        "/task-batches",
+        json=_batch_payload("research_topic", f"{suffix}-search", input_payload={"query": "topic"}),
+    )
     assert search_response.status_code == 201
     search_tasks = search_response.json()["tasks"]
     assert all(task["assigned_agent_role"] == "search_agent" for task in search_tasks)
-    assert all(task["routing_reason"] == "matched by capability=task:research_topic" for task in search_tasks)
+    assert all("via capability,schema" in task["routing_reason"] for task in search_tasks)
 
-    code_response = client.post("/task-batches", json=_batch_payload("implement_feature", f"{suffix}-code"))
+    code_response = client.post("/task-batches", json=_batch_payload("implement_feature", f"{suffix}-code", input_payload={"prompt": "do it", "language": "python"}))
     assert code_response.status_code == 201
     code_tasks = code_response.json()["tasks"]
     assert all(task["assigned_agent_role"] == "code_agent" for task in code_tasks)
-    assert all(task["routing_reason"] == "matched by capability=task:implement_feature" for task in code_tasks)
+    assert all("via capability,schema" in task["routing_reason"] for task in code_tasks)
+
+
+def test_prefers_higher_success_rate_when_multiple_roles_match_same_task() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    stable_role = _register_agent(
+        client,
+        role_name=f"{ROUTING_PREFIX}stable-{suffix}",
+        capabilities=["task:generate"],
+        supported_task_types=["generate"],
+    )
+    flaky_role = _register_agent(
+        client,
+        role_name=f"{ROUTING_PREFIX}flaky-{suffix}",
+        capabilities=["task:generate"],
+        supported_task_types=["generate"],
+    )
+    _seed_history(stable_role["id"], stable_role["role_name"], run_statuses=["success", "success", "failed"], suffix=suffix)
+    _seed_history(flaky_role["id"], flaky_role["role_name"], run_statuses=["success", "failed", "failed"], suffix=suffix)
+
+    response = client.post("/task-batches", json=_batch_payload("generate", suffix))
+
+    assert response.status_code == 201
+    tasks = response.json()["tasks"]
+    assert all(task["assigned_agent_role"] == stable_role["role_name"] for task in tasks)
+    assert all("success_rate=66.67%" in task["routing_reason"] for task in tasks)
+
+
+def test_prefers_lower_cost_for_low_cost_hint_when_roles_otherwise_match() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    cheap_role = _register_agent(
+        client,
+        role_name=f"{ROUTING_PREFIX}cheap-{suffix}",
+        capabilities=["task:generate"],
+        supported_task_types=["generate"],
+    )
+    costly_role = _register_agent(
+        client,
+        role_name=f"{ROUTING_PREFIX}costly-{suffix}",
+        capabilities=["task:generate"],
+        supported_task_types=["generate"],
+    )
+    _seed_history(cheap_role["id"], cheap_role["role_name"], run_statuses=["success"], suffix=suffix, prompt_tokens=10, completion_tokens=5)
+    _seed_history(costly_role["id"], costly_role["role_name"], run_statuses=["success"], suffix=suffix, prompt_tokens=500, completion_tokens=500)
+
+    response = client.post(
+        "/task-batches",
+        json=_batch_payload("generate", suffix, input_payload={"text": "hello", "cost_hint": "low"}),
+    )
+
+    assert response.status_code == 201
+    tasks = response.json()["tasks"]
+    assert all(task["assigned_agent_role"] == cheap_role["role_name"] for task in tasks)
+
+
+def test_filters_roles_that_cannot_meet_timeout_requirement() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    short_role = _register_agent(
+        client,
+        role_name=f"{ROUTING_PREFIX}short-{suffix}",
+        capabilities=["task:generate"],
+        supported_task_types=["generate"],
+        timeout_seconds=30,
+    )
+    long_role = _register_agent(
+        client,
+        role_name=f"{ROUTING_PREFIX}long-{suffix}",
+        capabilities=["task:generate"],
+        supported_task_types=["generate"],
+        timeout_seconds=600,
+    )
+
+    response = client.post(
+        "/task-batches",
+        json=_batch_payload("generate", suffix, input_payload={"text": "hello", "timeout_seconds": 120}),
+    )
+
+    assert response.status_code == 201
+    tasks = response.json()["tasks"]
+    assert all(task["assigned_agent_role"] == long_role["role_name"] for task in tasks)
+    assert all(task["assigned_agent_role"] != short_role["role_name"] for task in tasks)
+
+
+def test_marks_tasks_waiting_review_when_all_candidates_filtered_out() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    _register_agent(
+        client,
+        role_name=f"{ROUTING_PREFIX}short-{suffix}",
+        capabilities=["task:generate"],
+        supported_task_types=["generate"],
+        timeout_seconds=30,
+    )
+
+    response = client.post(
+        "/task-batches",
+        json=_batch_payload("generate", suffix, input_payload={"text": "hello", "timeout_seconds": 120}),
+    )
+
+    assert response.status_code == 201
+    tasks = response.json()["tasks"]
+    assert all(task["assigned_agent_role"] is None for task in tasks)
+    assert all(task["needs_review"] is True for task in tasks)
+    assert all(task["status"] == "needs_review" for task in tasks)
+    assert all(task["routing_reason"] == "No eligible agent role found for task_type=generate" for task in tasks)
 
 
 def test_routes_tasks_to_default_worker_as_fallback() -> None:
@@ -204,7 +427,7 @@ def test_routes_tasks_to_default_worker_as_fallback() -> None:
     assert response.status_code == 201
     tasks = response.json()["tasks"]
     assert all(task["assigned_agent_role"] == role["role_name"] for task in tasks)
-    assert all(task["routing_reason"] == "fallback to default_worker" for task in tasks)
+    assert all("via default_worker" in task["routing_reason"] for task in tasks)
 
 
 def test_marks_tasks_waiting_review_when_no_role_matches() -> None:

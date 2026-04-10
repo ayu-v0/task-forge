@@ -19,6 +19,7 @@ from src.packages.core.db.models import (
     TaskBatchORM,
     TaskORM,
 )
+from src.packages.core.costs import estimate_cost
 from src.packages.core.error_classification import classify_task_error, summarize_failure_categories
 from src.packages.core.schemas import (
     BatchTimelineRead,
@@ -37,7 +38,7 @@ from src.packages.core.schemas import (
 )
 from src.packages.core.timeline import load_batch_timeline
 from src.packages.core.task_state_machine import transition_task_status
-from src.packages.router import route_task
+from src.packages.router import RoleRoutingStats, route_task
 
 router = APIRouter(prefix="/task-batches", tags=["task-batches"])
 
@@ -125,6 +126,48 @@ def _load_latest_runs(task_ids: list[str], db: Session) -> dict[str, ExecutionRu
     for run in runs:
         latest_runs.setdefault(run.task_id, run)
     return latest_runs
+
+
+def _load_role_routing_stats(db: Session) -> dict[str, RoleRoutingStats]:
+    runs = db.scalars(
+        select(ExecutionRunORM).order_by(ExecutionRunORM.started_at.asc(), ExecutionRunORM.id.asc())
+    ).all()
+    if not runs:
+        return {}
+
+    stats_by_role_id: dict[str, dict[str, float | int]] = {}
+    for run in runs:
+        stats = stats_by_role_id.setdefault(
+            run.agent_role_id,
+            {
+                "total_runs": 0,
+                "success_runs": 0,
+                "latency_sum": 0,
+                "latency_count": 0,
+                "cost_sum": 0.0,
+            },
+        )
+        stats["total_runs"] += 1
+        if run.run_status == "success":
+            stats["success_runs"] += 1
+        if run.latency_ms is not None:
+            stats["latency_sum"] += int(run.latency_ms)
+            stats["latency_count"] += 1
+        stats["cost_sum"] += estimate_cost(run.token_usage)
+
+    role_stats: dict[str, RoleRoutingStats] = {}
+    for role_id, raw in stats_by_role_id.items():
+        latency_count = int(raw["latency_count"])
+        average_latency_ms = round(raw["latency_sum"] / latency_count, 2) if latency_count else None
+        total_runs = int(raw["total_runs"])
+        average_cost_estimate = round(raw["cost_sum"] / total_runs, 6) if total_runs else 0.0
+        role_stats[role_id] = RoleRoutingStats(
+            total_runs=total_runs,
+            success_runs=int(raw["success_runs"]),
+            average_latency_ms=average_latency_ms,
+            average_cost_estimate=average_cost_estimate,
+        )
+    return role_stats
 
 
 def _load_batch_artifacts(task_ids: list[str], db: Session) -> tuple[list[ArtifactORM], dict[str, int]]:
@@ -309,10 +352,11 @@ def create_task_batch(
                 ]
 
             agent_roles = db.scalars(select(AgentRoleORM)).all()
+            role_routing_stats = _load_role_routing_stats(db)
 
             for submitted_task in payload.tasks:
                 task = task_mapping[submitted_task.client_task_id]
-                route_result = route_task(task, list(agent_roles))
+                route_result = route_task(task, list(agent_roles), role_routing_stats)
 
                 if route_result.needs_review:
                     task.assigned_agent_role = None
