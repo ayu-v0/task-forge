@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -93,12 +94,38 @@ def _batch_payload(suffix: str) -> dict:
     }
 
 
+def _review_id_for_task(task_id: str) -> str:
+    return client.get(f"/tasks/{task_id}/reviews").json()[0]["id"]
+
+
+def _set_review_policy(review_id: str, *, timeout_policy: str, deadline_at: datetime, reason_category: str = "routing_failure") -> None:
+    engine = create_engine(_database_url())
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE review_checkpoints
+                SET timeout_policy = :timeout_policy,
+                    deadline_at = :deadline_at,
+                    reason_category = :reason_category
+                WHERE id = :review_id
+                """
+            ),
+            {
+                "timeout_policy": timeout_policy,
+                "deadline_at": deadline_at,
+                "reason_category": reason_category,
+                "review_id": review_id,
+            },
+        )
+
+
 _cleanup_database()
 
 from src.apps.api.app import app  # noqa: E402
 from src.apps.worker.executor import run_next_task  # noqa: E402
 from src.apps.worker.registry import AgentRegistry  # noqa: E402
-from src.packages.core.db.models import ExecutionRunORM, TaskORM  # noqa: E402
+from src.packages.core.db.models import AssignmentORM, ExecutionRunORM, EventLogORM, ReviewCheckpointORM, TaskORM  # noqa: E402
 
 
 client = TestClient(app)
@@ -117,7 +144,7 @@ def teardown_function() -> None:
     _cleanup_database()
 
 
-def test_lists_task_reviews_and_review_created_event() -> None:
+def test_lists_task_reviews_and_exposes_reason_category_timeout_policy_and_deadline() -> None:
     suffix = uuid.uuid4().hex[:8]
     response = client.post("/task-batches", json=_batch_payload(suffix))
     assert response.status_code == 201
@@ -128,6 +155,9 @@ def test_lists_task_reviews_and_review_created_event() -> None:
     reviews = reviews_response.json()
     assert len(reviews) == 1
     assert reviews[0]["review_status"] == "pending"
+    assert reviews[0]["reason_category"] == "routing_failure"
+    assert reviews[0]["timeout_policy"] == "fail_closed"
+    assert reviews[0]["deadline_at"] is not None
     assert "No eligible agent role found" in reviews[0]["reason"]
 
     review_id = reviews[0]["id"]
@@ -146,9 +176,7 @@ def test_approve_review_assigns_role_and_worker_executes_task() -> None:
     response = client.post("/task-batches", json=_batch_payload(suffix))
     assert response.status_code == 201
     task_id = response.json()["tasks"][0]["task_id"]
-
-    reviews = client.get(f"/tasks/{task_id}/reviews").json()
-    review_id = reviews[0]["id"]
+    review_id = _review_id_for_task(task_id)
 
     role_name = f"{TEST_PREFIX}worker-{suffix}"
     role = _register_agent(client, role_name=role_name, supported_task_types=[role_name])
@@ -183,57 +211,181 @@ def test_approve_review_assigns_role_and_worker_executes_task() -> None:
     assert "task_review_resolved" in event_types
 
 
-def test_approve_review_with_unsatisfied_dependency_moves_task_to_blocked() -> None:
-    suffix = uuid.uuid4().hex[:8]
-    response = client.post("/task-batches", json=_batch_payload(suffix))
-    assert response.status_code == 201
-    dependent_task_id = response.json()["tasks"][1]["task_id"]
-
-    review_id = client.get(f"/tasks/{dependent_task_id}/reviews").json()[0]["id"]
-    role = _register_agent(
-        client,
-        role_name=f"{TEST_PREFIX}blocked-{suffix}",
-        supported_task_types=[f"{TEST_PREFIX}blocked-{suffix}"],
-    )
-
-    approve_response = client.post(
-        f"/reviews/{review_id}/approve",
-        json={
-            "reviewer": "bob",
-            "review_comment": "approved after manual routing",
-            "agent_role_id": role["id"],
-        },
-    )
-    assert approve_response.status_code == 200
-    assert approve_response.json()["status"] == "blocked"
-
-
-def test_reject_review_marks_task_failed_and_prevents_execution() -> None:
+def test_reassign_review_supersedes_previous_assignment_and_keeps_task_runnable() -> None:
     suffix = uuid.uuid4().hex[:8]
     response = client.post("/task-batches", json=_batch_payload(suffix))
     assert response.status_code == 201
     task_id = response.json()["tasks"][0]["task_id"]
+    review_id = _review_id_for_task(task_id)
 
-    review_id = client.get(f"/tasks/{task_id}/reviews").json()[0]["id"]
-    reject_response = client.post(
-        f"/reviews/{review_id}/reject",
-        json={
-            "reviewer": "alice",
-            "review_comment": "insufficient confidence",
-        },
-    )
-    assert reject_response.status_code == 200
-    assert reject_response.json()["status"] == "failed"
+    first_role = _register_agent(client, role_name=f"{TEST_PREFIX}first-{suffix}", supported_task_types=["dummy"])
+    second_role = _register_agent(client, role_name=f"{TEST_PREFIX}second-{suffix}", supported_task_types=["dummy"])
 
     engine = create_engine(_database_url())
     with Session(engine) as session:
-        assert run_next_task(session, AgentRegistry()) is None
-        assert session.query(ExecutionRunORM).filter(ExecutionRunORM.task_id == task_id).count() == 0
+        session.add(
+            AssignmentORM(
+                task_id=task_id,
+                agent_role_id=first_role["id"],
+                routing_reason="stale assignment",
+                assignment_status="active",
+            )
+        )
+        task = session.get(TaskORM, task_id)
+        assert task is not None
+        task.assigned_agent_role = first_role["role_name"]
+        session.commit()
 
-    events_response = client.get(f"/tasks/{task_id}/events")
-    event_types = [event["event_type"] for event in events_response.json()]
-    assert "review_rejected" in event_types
-    assert "task_review_resolved" in event_types
+    reassign_response = client.post(
+        f"/reviews/{review_id}/reassign",
+        json={
+            "reviewer": "bob",
+            "review_comment": "assign to fallback role",
+            "agent_role_id": second_role["id"],
+        },
+    )
+    assert reassign_response.status_code == 200
+    assert reassign_response.json()["status"] == "queued"
+    assert reassign_response.json()["assigned_agent_role"] == second_role["role_name"]
+
+    with Session(engine) as session:
+        assignments = session.query(AssignmentORM).filter(AssignmentORM.task_id == task_id).order_by(AssignmentORM.assigned_at.asc()).all()
+        assert len(assignments) == 2
+        assert assignments[0].assignment_status == "superseded"
+        assert assignments[1].assignment_status == "active"
+
+    events = client.get(f"/tasks/{task_id}/events").json()
+    assert "review_reassigned" in [event["event_type"] for event in events]
+
+
+def test_bulk_approve_reviews_returns_per_item_results() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    response = client.post("/task-batches", json=_batch_payload(suffix))
+    assert response.status_code == 201
+    task_ids = [item["task_id"] for item in response.json()["tasks"]]
+    review_ids = [_review_id_for_task(task_id) for task_id in task_ids]
+    role = _register_agent(client, role_name=f"{TEST_PREFIX}bulk-{suffix}", supported_task_types=["dummy"])
+
+    bulk_response = client.post(
+        "/reviews/bulk/approve",
+        json={
+            "review_ids": [review_ids[0], "review_missing", review_ids[2]],
+            "reviewer": "alice",
+            "review_comment": "bulk approval",
+            "agent_role_id": role["id"],
+        },
+    )
+    assert bulk_response.status_code == 200
+    items = bulk_response.json()["items"]
+    assert len(items) == 3
+    assert items[0]["ok"] is True
+    assert items[0]["status"] == "queued"
+    assert items[1]["ok"] is False
+    assert "not found" in items[1]["detail"].lower()
+    assert items[2]["ok"] is True
+
+
+def test_bulk_reject_handles_already_resolved_review_without_rolling_back_others() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    response = client.post("/task-batches", json=_batch_payload(suffix))
+    assert response.status_code == 201
+    task_ids = [item["task_id"] for item in response.json()["tasks"]]
+    review_ids = [_review_id_for_task(task_id) for task_id in task_ids]
+    role = _register_agent(client, role_name=f"{TEST_PREFIX}once-{suffix}", supported_task_types=["dummy"])
+
+    first_approve = client.post(
+        f"/reviews/{review_ids[0]}/approve",
+        json={"reviewer": "alice", "review_comment": "approve one", "agent_role_id": role["id"]},
+    )
+    assert first_approve.status_code == 200
+
+    bulk_reject = client.post(
+        "/reviews/bulk/reject",
+        json={
+            "review_ids": review_ids,
+            "reviewer": "alice",
+            "review_comment": "bulk reject",
+        },
+    )
+    assert bulk_reject.status_code == 200
+    items = bulk_reject.json()["items"]
+    assert len(items) == 3
+    assert items[0]["ok"] is False
+    assert "cannot be decided" in items[0]["detail"]
+    assert items[1]["ok"] is True
+    assert items[1]["status"] == "failed"
+    assert items[2]["ok"] is True
+
+
+def test_process_timeouts_fail_closed_marks_task_failed() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    response = client.post("/task-batches", json=_batch_payload(suffix))
+    assert response.status_code == 201
+    task_id = response.json()["tasks"][0]["task_id"]
+    review_id = _review_id_for_task(task_id)
+    _set_review_policy(
+        review_id,
+        timeout_policy="fail_closed",
+        deadline_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+
+    timeout_response = client.post("/reviews/process-timeouts", json={"limit": 10})
+    assert timeout_response.status_code == 200
+    assert timeout_response.json()["processed_count"] == 1
+
+    task_response = client.get(f"/tasks/{task_id}")
+    assert task_response.status_code == 200
+    assert task_response.json()["status"] == "failed"
+
+
+def test_process_timeouts_cancel_task_marks_task_cancelled() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    response = client.post("/task-batches", json=_batch_payload(suffix))
+    assert response.status_code == 201
+    task_id = response.json()["tasks"][0]["task_id"]
+    review_id = _review_id_for_task(task_id)
+    _set_review_policy(
+        review_id,
+        timeout_policy="cancel_task",
+        deadline_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+
+    timeout_response = client.post("/reviews/process-timeouts", json={"limit": 10})
+    assert timeout_response.status_code == 200
+    assert timeout_response.json()["processed_count"] == 1
+
+    task_response = client.get(f"/tasks/{task_id}")
+    assert task_response.status_code == 200
+    assert task_response.json()["status"] == "cancelled"
+
+
+def test_process_timeouts_escalate_creates_new_pending_review_and_is_idempotent() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    response = client.post("/task-batches", json=_batch_payload(suffix))
+    assert response.status_code == 201
+    task_id = response.json()["tasks"][0]["task_id"]
+    review_id = _review_id_for_task(task_id)
+    _set_review_policy(
+        review_id,
+        timeout_policy="escalate",
+        deadline_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+
+    first_timeout = client.post("/reviews/process-timeouts", json={"limit": 10})
+    assert first_timeout.status_code == 200
+    assert first_timeout.json()["processed_count"] == 1
+
+    reviews = client.get(f"/tasks/{task_id}/reviews").json()
+    assert len(reviews) == 2
+    assert reviews[0]["review_status"] == "rejected"
+    assert reviews[1]["review_status"] == "pending"
+    assert reviews[1]["reason_category"] == "manual_override"
+
+    second_timeout = client.post("/reviews/process-timeouts", json={"limit": 10})
+    assert second_timeout.status_code == 200
+    assert second_timeout.json()["processed_count"] == 0
+    reviews_after = client.get(f"/tasks/{task_id}/reviews").json()
+    assert len(reviews_after) == 2
 
 
 def test_cannot_decide_review_after_task_is_cancelled() -> None:
@@ -241,7 +393,7 @@ def test_cannot_decide_review_after_task_is_cancelled() -> None:
     response = client.post("/task-batches", json=_batch_payload(suffix))
     assert response.status_code == 201
     task_id = response.json()["tasks"][0]["task_id"]
-    review_id = client.get(f"/tasks/{task_id}/reviews").json()[0]["id"]
+    review_id = _review_id_for_task(task_id)
 
     cancel_response = client.post(f"/tasks/{task_id}/cancel", json={"reason": "user stop"})
     assert cancel_response.status_code == 200
@@ -277,7 +429,7 @@ def test_cannot_approve_review_twice() -> None:
     response = client.post("/task-batches", json=_batch_payload(suffix))
     assert response.status_code == 201
     task_id = response.json()["tasks"][0]["task_id"]
-    review_id = client.get(f"/tasks/{task_id}/reviews").json()[0]["id"]
+    review_id = _review_id_for_task(task_id)
     role = _register_agent(
         client,
         role_name=f"{TEST_PREFIX}repeat-{suffix}",

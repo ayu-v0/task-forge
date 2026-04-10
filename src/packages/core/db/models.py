@@ -125,10 +125,13 @@ class ReviewCheckpointORM(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: _id("review"))
     task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_category: Mapped[str] = mapped_column(String(64), nullable=False, default="other", index=True)
+    timeout_policy: Mapped[str] = mapped_column(String(32), nullable=False, default="fail_closed")
     review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     reviewer: Mapped[str | None] = mapped_column(String(255), nullable=True)
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     task: Mapped["TaskORM"] = relationship(back_populates="review_checkpoints")

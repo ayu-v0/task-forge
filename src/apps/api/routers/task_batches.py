@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -19,6 +19,7 @@ from src.packages.core.db.models import (
     TaskBatchORM,
     TaskORM,
 )
+from src.packages.core.costs import estimate_cost
 from src.packages.core.error_classification import classify_task_error, summarize_failure_categories
 from src.packages.core.schemas import (
     BatchTimelineRead,
@@ -33,17 +34,24 @@ from src.packages.core.schemas import (
     TaskBatchSummaryRead,
     TaskBatchSubmitRequest,
     TaskBatchSubmitResponse,
+    TaskBatchTaskCreate,
     TaskBatchSubmitTaskRead,
+    TaskNormalizationRead,
 )
+from src.packages.core.task_batch_normalization import normalize_batch_tasks
 from src.packages.core.timeline import load_batch_timeline
 from src.packages.core.task_state_machine import transition_task_status
-from src.packages.router import route_task
+from src.packages.router import RoleRoutingStats, route_task
 
 router = APIRouter(prefix="/task-batches", tags=["task-batches"])
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _review_deadline() -> datetime:
+    return _now().replace(microsecond=0) + timedelta(minutes=30)
 
 
 def _build_batch_counts(tasks: list[TaskORM]) -> BatchCountsRead:
@@ -125,6 +133,48 @@ def _load_latest_runs(task_ids: list[str], db: Session) -> dict[str, ExecutionRu
     for run in runs:
         latest_runs.setdefault(run.task_id, run)
     return latest_runs
+
+
+def _load_role_routing_stats(db: Session) -> dict[str, RoleRoutingStats]:
+    runs = db.scalars(
+        select(ExecutionRunORM).order_by(ExecutionRunORM.started_at.asc(), ExecutionRunORM.id.asc())
+    ).all()
+    if not runs:
+        return {}
+
+    stats_by_role_id: dict[str, dict[str, float | int]] = {}
+    for run in runs:
+        stats = stats_by_role_id.setdefault(
+            run.agent_role_id,
+            {
+                "total_runs": 0,
+                "success_runs": 0,
+                "latency_sum": 0,
+                "latency_count": 0,
+                "cost_sum": 0.0,
+            },
+        )
+        stats["total_runs"] += 1
+        if run.run_status == "success":
+            stats["success_runs"] += 1
+        if run.latency_ms is not None:
+            stats["latency_sum"] += int(run.latency_ms)
+            stats["latency_count"] += 1
+        stats["cost_sum"] += estimate_cost(run.token_usage)
+
+    role_stats: dict[str, RoleRoutingStats] = {}
+    for role_id, raw in stats_by_role_id.items():
+        latency_count = int(raw["latency_count"])
+        average_latency_ms = round(raw["latency_sum"] / latency_count, 2) if latency_count else None
+        total_runs = int(raw["total_runs"])
+        average_cost_estimate = round(raw["cost_sum"] / total_runs, 6) if total_runs else 0.0
+        role_stats[role_id] = RoleRoutingStats(
+            total_runs=total_runs,
+            success_runs=int(raw["success_runs"]),
+            average_latency_ms=average_latency_ms,
+            average_cost_estimate=average_cost_estimate,
+        )
+    return role_stats
 
 
 def _load_batch_artifacts(task_ids: list[str], db: Session) -> tuple[list[ArtifactORM], dict[str, int]]:
@@ -263,9 +313,18 @@ def create_task_batch(
     payload: TaskBatchSubmitRequest,
     db: Session = Depends(get_db),
 ) -> TaskBatchSubmitResponse:
-    _validate_unique_client_task_ids(payload)
-    _validate_dependencies_exist(payload)
-    _detect_cycle(payload)
+    normalized_tasks, normalization_items = normalize_batch_tasks(
+        [task.model_dump() for task in payload.tasks]
+    )
+    normalized_payload = payload.model_copy(
+        update={
+            "tasks": [TaskBatchTaskCreate.model_validate(task) for task in normalized_tasks],
+        }
+    )
+
+    _validate_unique_client_task_ids(normalized_payload)
+    _validate_dependencies_exist(normalized_payload)
+    _detect_cycle(normalized_payload)
 
     task_mapping: dict[str, TaskORM] = {}
     routing_results: dict[str, dict[str, str | bool | None | list[str]]] = {}
@@ -273,17 +332,17 @@ def create_task_batch(
     try:
         with db.begin():
             task_batch = TaskBatchORM(
-                title=payload.title,
-                description=payload.description,
-                created_by=payload.created_by,
+                title=normalized_payload.title,
+                description=normalized_payload.description,
+                created_by=normalized_payload.created_by,
                 status="draft",
-                total_tasks=len(payload.tasks),
-                metadata_json=payload.metadata,
+                total_tasks=len(normalized_payload.tasks),
+                metadata_json=normalized_payload.metadata,
             )
             db.add(task_batch)
             db.flush()
 
-            for submitted_task in payload.tasks:
+            for submitted_task in normalized_payload.tasks:
                 task = TaskORM(
                     batch_id=task_batch.id,
                     title=submitted_task.title,
@@ -301,7 +360,7 @@ def create_task_batch(
                 db.flush()
                 task_mapping[submitted_task.client_task_id] = task
 
-            for submitted_task in payload.tasks:
+            for submitted_task in normalized_payload.tasks:
                 task = task_mapping[submitted_task.client_task_id]
                 task.dependency_ids = [
                     task_mapping[dependency_id].id
@@ -309,10 +368,11 @@ def create_task_batch(
                 ]
 
             agent_roles = db.scalars(select(AgentRoleORM)).all()
+            role_routing_stats = _load_role_routing_stats(db)
 
-            for submitted_task in payload.tasks:
+            for submitted_task in normalized_payload.tasks:
                 task = task_mapping[submitted_task.client_task_id]
-                route_result = route_task(task, list(agent_roles))
+                route_result = route_task(task, list(agent_roles), role_routing_stats)
 
                 if route_result.needs_review:
                     task.assigned_agent_role = None
@@ -326,7 +386,10 @@ def create_task_batch(
                     review_checkpoint = ReviewCheckpointORM(
                         task_id=task.id,
                         reason=route_result.routing_reason,
+                        reason_category="routing_failure",
+                        timeout_policy="fail_closed",
                         review_status="pending",
+                        deadline_at=_review_deadline(),
                     )
                     db.add(review_checkpoint)
                     db.flush()
@@ -343,6 +406,9 @@ def create_task_batch(
                                 "task_id": task.id,
                                 "review_id": review_checkpoint.id,
                                 "reason": route_result.routing_reason,
+                                "reason_category": review_checkpoint.reason_category,
+                                "timeout_policy": review_checkpoint.timeout_policy,
+                                "deadline_at": review_checkpoint.deadline_at.isoformat() if review_checkpoint.deadline_at else None,
                                 "source": "router",
                             },
                         )
@@ -385,6 +451,8 @@ def create_task_batch(
 
         return TaskBatchSubmitResponse(
             batch_id=task_batch.id,
+            original_task_count=len(payload.tasks),
+            normalized_task_count=len(normalized_payload.tasks),
             tasks=[
                 TaskBatchSubmitTaskRead(
                     task_id=task_mapping[submitted_task.client_task_id].id,
@@ -397,7 +465,19 @@ def create_task_batch(
                     auto_execute=routing_results[submitted_task.client_task_id]["auto_execute"],
                     needs_review=routing_results[submitted_task.client_task_id]["needs_review"],
                 )
-                for submitted_task in payload.tasks
+                for submitted_task in normalized_payload.tasks
+            ],
+            normalization=[
+                TaskNormalizationRead(
+                    client_task_id=item.source_client_task_id,
+                    effective_client_task_id=item.effective_client_task_id,
+                    action=item.action,
+                    is_ambiguous=item.is_ambiguous,
+                    missing_fields_filled=item.missing_fields_filled,
+                    inferred_dependency_client_task_ids=item.inferred_dependency_client_task_ids,
+                    notes=item.notes,
+                )
+                for item in normalization_items
             ],
         )
     except HTTPException:

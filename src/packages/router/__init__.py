@@ -1,3 +1,3 @@
-from .rule_router import RouteResult, route_task
+from .rule_router import RoleRoutingStats, RouteResult, route_task
 
-__all__ = ["RouteResult", "route_task"]
+__all__ = ["RoleRoutingStats", "RouteResult", "route_task"]
