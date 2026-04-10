@@ -142,7 +142,9 @@ def build_task_timeline(task: TaskORM, events: list[EventLogORM]) -> TaskTimelin
             "review_checkpoint_created": ("review", "Approval requested"),
             "review_approved": ("review", "Review approved"),
             "review_rejected": ("review", "Review rejected"),
+            "review_reassigned": ("review", "Review reassigned"),
             "task_review_resolved": ("review", "Review resolved"),
+            "execution_run_replay_snapshot": ("running", "Replay snapshot saved"),
             "execution_run_started": ("running", "Execution started"),
             "execution_run_finished": (
                 "completed" if event.event_status == "success" else "failed",

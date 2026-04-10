@@ -380,6 +380,19 @@ class RunRoutingRead(SchemaModel):
     agent_role_name: str | None = None
 
 
+class RunRoutingSnapshotRead(SchemaModel):
+    task_id: str
+    run_id: str
+    assignment_id: str | None = None
+    agent_role_id: str | None = None
+    agent_role_name: str | None = None
+    routing_reason: str | None = None
+    task_type: str | None = None
+    input_snapshot: dict[str, Any] = Field(default_factory=dict)
+    expected_output_schema: dict[str, Any] = Field(default_factory=dict)
+    dependency_ids: list[str] = Field(default_factory=list)
+
+
 class RunRetryHistoryItemRead(SchemaModel):
     run_id: str
     run_status: ExecutionRunStatus
@@ -398,6 +411,32 @@ class RunDetailRead(SchemaModel):
     events: list[TaskEventRead] = Field(default_factory=list)
     cost_estimate: float = 0
     error_category: str | None = None
+
+
+class RunReplayRead(SchemaModel):
+    run: ExecutionRunRead
+    task: RunDetailTaskRead
+    routing_snapshot: RunRoutingSnapshotRead | None = None
+    status_history: list[TaskStatusHistoryItemRead] = Field(default_factory=list)
+    timeline: TaskTimelineRead
+    events: list[TaskEventRead] = Field(default_factory=list)
+    replay_ready: bool = False
+
+
+class BatchReplayItemRead(SchemaModel):
+    task_id: str
+    title: str
+    task_type: str
+    status: str
+    routing_snapshot: RunRoutingSnapshotRead | None = None
+    latest_run: ExecutionRunRead | None = None
+    timeline: TaskTimelineRead
+
+
+class BatchReplayRead(SchemaModel):
+    batch: TaskBatchRead
+    derived_status: str
+    items: list[BatchReplayItemRead] = Field(default_factory=list)
 
 
 class ReviewCheckpointCreate(SchemaModel):
