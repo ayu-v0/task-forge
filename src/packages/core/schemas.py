@@ -8,7 +8,9 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from src.domain.models import (
     AssignmentStatus,
     ExecutionRunStatus,
+    ReviewReasonCategory,
     ReviewStatus,
+    ReviewTimeoutPolicy,
     TaskBatchStatus,
     TaskPriority,
     TaskStatus,
@@ -401,9 +403,12 @@ class RunDetailRead(SchemaModel):
 class ReviewCheckpointCreate(SchemaModel):
     task_id: str
     reason: str
+    reason_category: ReviewReasonCategory = ReviewReasonCategory.OTHER
+    timeout_policy: ReviewTimeoutPolicy = ReviewTimeoutPolicy.FAIL_CLOSED
     review_status: ReviewStatus = ReviewStatus.PENDING
     reviewer: str | None = None
     review_comment: str | None = None
+    deadline_at: datetime | None = None
 
 
 class ReviewCheckpointRead(ReviewCheckpointCreate):
@@ -421,6 +426,54 @@ class ReviewDecisionApproveRequest(SchemaModel):
 class ReviewDecisionRejectRequest(SchemaModel):
     reviewer: str = Field(min_length=1)
     review_comment: str = Field(min_length=1)
+
+
+class ReviewDecisionReassignRequest(SchemaModel):
+    reviewer: str = Field(min_length=1)
+    review_comment: str | None = None
+    agent_role_id: str = Field(min_length=1)
+
+
+class BulkReviewApproveRequest(SchemaModel):
+    review_ids: list[str] = Field(min_length=1)
+    reviewer: str = Field(min_length=1)
+    review_comment: str | None = None
+    agent_role_id: str = Field(min_length=1)
+
+
+class BulkReviewRejectRequest(SchemaModel):
+    review_ids: list[str] = Field(min_length=1)
+    reviewer: str = Field(min_length=1)
+    review_comment: str = Field(min_length=1)
+
+
+class BulkReviewReassignRequest(SchemaModel):
+    review_ids: list[str] = Field(min_length=1)
+    reviewer: str = Field(min_length=1)
+    review_comment: str | None = None
+    agent_role_id: str = Field(min_length=1)
+
+
+class BulkReviewItemResult(SchemaModel):
+    review_id: str
+    ok: bool
+    task_id: str | None = None
+    status: str | None = None
+    assigned_agent_role: str | None = None
+    detail: str | None = None
+
+
+class BulkReviewDecisionResponse(SchemaModel):
+    items: list[BulkReviewItemResult] = Field(default_factory=list)
+
+
+class ReviewTimeoutProcessRequest(SchemaModel):
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class ReviewTimeoutProcessResponse(SchemaModel):
+    processed_count: int = 0
+    items: list[BulkReviewItemResult] = Field(default_factory=list)
 
 
 class ArtifactCreate(SchemaModel):

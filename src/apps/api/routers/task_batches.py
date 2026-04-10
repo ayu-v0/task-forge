@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -48,6 +48,10 @@ router = APIRouter(prefix="/task-batches", tags=["task-batches"])
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _review_deadline() -> datetime:
+    return _now().replace(microsecond=0) + timedelta(minutes=30)
 
 
 def _build_batch_counts(tasks: list[TaskORM]) -> BatchCountsRead:
@@ -382,7 +386,10 @@ def create_task_batch(
                     review_checkpoint = ReviewCheckpointORM(
                         task_id=task.id,
                         reason=route_result.routing_reason,
+                        reason_category="routing_failure",
+                        timeout_policy="fail_closed",
                         review_status="pending",
+                        deadline_at=_review_deadline(),
                     )
                     db.add(review_checkpoint)
                     db.flush()
@@ -399,6 +406,9 @@ def create_task_batch(
                                 "task_id": task.id,
                                 "review_id": review_checkpoint.id,
                                 "reason": route_result.routing_reason,
+                                "reason_category": review_checkpoint.reason_category,
+                                "timeout_policy": review_checkpoint.timeout_policy,
+                                "deadline_at": review_checkpoint.deadline_at.isoformat() if review_checkpoint.deadline_at else None,
                                 "source": "router",
                             },
                         )

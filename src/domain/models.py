@@ -66,6 +66,20 @@ class ReviewStatus(str, Enum):
     WAIVED = "waived"
 
 
+class ReviewReasonCategory(str, Enum):
+    ROUTING_FAILURE = "routing_failure"
+    SCHEMA_MISMATCH = "schema_mismatch"
+    TIMEOUT_RISK = "timeout_risk"
+    MANUAL_OVERRIDE = "manual_override"
+    OTHER = "other"
+
+
+class ReviewTimeoutPolicy(str, Enum):
+    FAIL_CLOSED = "fail_closed"
+    CANCEL_TASK = "cancel_task"
+    ESCALATE = "escalate"
+
+
 class DomainModel(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -143,8 +157,11 @@ class ReviewCheckpoint(DomainModel):
     id: str = Field(default_factory=lambda: _id("review"))
     task_id: str
     reason: str
+    reason_category: ReviewReasonCategory = ReviewReasonCategory.OTHER
+    timeout_policy: ReviewTimeoutPolicy = ReviewTimeoutPolicy.FAIL_CLOSED
     review_status: ReviewStatus = ReviewStatus.PENDING
     reviewer: str | None = None
     review_comment: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    deadline_at: datetime | None = None
     resolved_at: datetime | None = None
