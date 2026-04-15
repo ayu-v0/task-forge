@@ -184,6 +184,29 @@ def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM
                 batch_id=task.batch_id,
                 task_id=task.id,
                 run_id=run.id,
+                event_type="execution_run_replay_snapshot",
+                event_status="running",
+                message="worker captured replay snapshot for execution run",
+                payload={
+                    "task_id": task.id,
+                    "run_id": run.id,
+                    "assignment_id": assignment.id,
+                    "agent_role_id": assignment.agent_role_id,
+                    "agent_role_name": agent_role.role_name,
+                    "routing_reason": assignment.routing_reason,
+                    "task_type": task.task_type,
+                    "input_snapshot": task.input_payload,
+                    "expected_output_schema": task.expected_output_schema,
+                    "dependency_ids": task.dependency_ids,
+                    "source": "worker",
+                },
+            )
+        )
+        db.add(
+            EventLogORM(
+                batch_id=task.batch_id,
+                task_id=task.id,
+                run_id=run.id,
                 event_type="execution_run_started",
                 event_status="running",
                 message="worker started execution run",

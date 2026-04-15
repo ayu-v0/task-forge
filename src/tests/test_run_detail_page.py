@@ -179,7 +179,7 @@ def test_run_detail_endpoint_returns_routing_and_retry_history() -> None:
     assert payload["run"]["id"] == run_id
     assert payload["task"]["task_id"] == task_id
     assert payload["routing"]["agent_role_name"] == role_name
-    assert payload["routing"]["routing_reason"] == "matched by task_type=generate"
+    assert payload["routing"]["routing_reason"] == f"capability-ranked route selected role={role_name} via task_type,schema (no_history)"
     assert [item["run_status"] for item in payload["retry_history"]] == ["success", "failed"]
     assert payload["retry_history"][0]["is_current"] is True
     assert payload["run"]["token_usage"]["total_tokens"] == 8
