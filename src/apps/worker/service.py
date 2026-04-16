@@ -15,6 +15,7 @@ from src.packages.core.db.models import (
     TaskORM,
 )
 from src.packages.core.task_state_machine import transition_task_status
+from src.packages.core.token_budget import build_budget_report
 
 
 class WorkerService:
@@ -89,17 +90,27 @@ class WorkerService:
             raise RuntimeError(f"Assigned agent role {assignment.agent_role_id} not found")
 
         started_at = datetime.now(timezone.utc)
+        budget_report = build_budget_report(self.db, task, agent_role)
 
         run = ExecutionRunORM(
             task_id=task.id,
             agent_role_id=agent_role.id,
             run_status="running",
             started_at=started_at,
-            logs=[f"Execution started for role {agent_role.role_name}"],
+            logs=[
+                f"Execution started for role {agent_role.role_name}",
+                (
+                    "budget estimated: "
+                    f"input={budget_report['estimated_input_tokens']} "
+                    f"reserved_output={budget_report['reserved_output_tokens']} "
+                    f"overflow_risk={budget_report['overflow_risk']}"
+                ),
+            ],
             input_snapshot=task.input_payload,
             output_snapshot={},
             error_message=None,
             token_usage={},
+            budget_report=budget_report,
             latency_ms=None,
         )
         self.db.add(run)

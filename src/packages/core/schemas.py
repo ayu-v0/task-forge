@@ -25,6 +25,17 @@ class SchemaModel(BaseModel):
     )
 
 
+class BudgetReportRead(SchemaModel):
+    model_context_limit: int = Field(ge=0, default=0)
+    system_prompt_tokens: int = Field(ge=0, default=0)
+    task_input_tokens: int = Field(ge=0, default=0)
+    dependency_summary_tokens: int = Field(ge=0, default=0)
+    estimated_input_tokens: int = Field(ge=0, default=0)
+    reserved_output_tokens: int = Field(ge=0, default=0)
+    safe_budget: int = Field(ge=0, default=0)
+    overflow_risk: bool = False
+
+
 class TaskBatchCreate(SchemaModel):
     title: str
     description: str | None = None
@@ -357,6 +368,7 @@ class ExecutionRunCreate(SchemaModel):
     cancelled_at: datetime | None = None
     cancel_reason: str | None = None
     token_usage: dict[str, int] = Field(default_factory=dict)
+    budget_report: BudgetReportRead = Field(default_factory=BudgetReportRead)
     latency_ms: int | None = Field(default=None, ge=0)
 
 

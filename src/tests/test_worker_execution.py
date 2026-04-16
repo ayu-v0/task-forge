@@ -193,6 +193,10 @@ def test_worker_executes_queued_task_to_success() -> None:
     assert runs[0]["run_status"] == "success"
     assert runs[0]["output_snapshot"]["status"] == "ok"
     assert runs[0]["output_snapshot"]["task_id"] == executed_task_id
+    assert runs[0]["budget_report"]["model_context_limit"] == 128000
+    assert runs[0]["budget_report"]["estimated_input_tokens"] > 0
+    assert runs[0]["budget_report"]["reserved_output_tokens"] >= 256
+    assert runs[0]["budget_report"]["overflow_risk"] is False
 
     events_response = client.get(f"/tasks/{executed_task_id}/events")
     assert events_response.status_code == 200
@@ -202,6 +206,10 @@ def test_worker_executes_queued_task_to_success() -> None:
         if event["event_type"] == "task_status_changed"
     ]
     assert statuses == ["queued", "running", "success"]
+    replay_snapshot = next(
+        event for event in events_response.json() if event["event_type"] == "execution_run_replay_snapshot"
+    )
+    assert replay_snapshot["payload"]["budget_report"] == runs[0]["budget_report"]
 
 
 def test_worker_failure_preserves_context() -> None:
@@ -407,6 +415,74 @@ def test_worker_unlocks_blocked_task_after_dependency_success() -> None:
         if event["event_type"] == "task_status_changed"
     ]
     assert statuses == ["blocked", "queued"]
+
+
+def test_worker_budget_counts_dependency_summary_and_flags_overflow_risk() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    _register_agent(
+        client,
+        role_name="default_worker",
+        capabilities=["default_worker"],
+        supported_task_types=[],
+        declare_schema=False,
+    )
+
+    large_blob = "x" * 600000
+    payload = {
+        "title": f"{TEST_PREFIX}budget-batch-{suffix}",
+        "description": "budget batch",
+        "created_by": "pytest",
+        "metadata": {"suite": "worker-budget"},
+        "tasks": [
+            {
+                "client_task_id": "task_1",
+                "title": f"{TEST_PREFIX}budget-{suffix}-1",
+                "task_type": "generate",
+                "priority": "medium",
+                "input_payload": {"text": "seed"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+            {
+                "client_task_id": "task_2",
+                "title": f"{TEST_PREFIX}budget-{suffix}-2",
+                "task_type": "generate",
+                "priority": "medium",
+                "input_payload": {"text": large_blob},
+                "expected_output_schema": {"type": "object", "properties": {"summary": {"type": "string"}}},
+                "dependency_client_task_ids": ["task_1"],
+            },
+            {
+                "client_task_id": "task_3",
+                "title": f"{TEST_PREFIX}budget-{suffix}-3",
+                "task_type": "generate",
+                "priority": "medium",
+                "input_payload": {"text": "tail"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+        ],
+    }
+    response = client.post("/task-batches", json=payload)
+    assert response.status_code == 201
+    dependent_task_id = response.json()["tasks"][1]["task_id"]
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        first_run = run_next_task(session, build_default_registry())
+        assert first_run is not None
+    with Session(engine) as session:
+        second_run = run_next_task(session, build_default_registry())
+        assert second_run is not None
+        assert second_run.task_id == dependent_task_id
+
+    runs_response = client.get(f"/tasks/{dependent_task_id}/runs")
+    assert runs_response.status_code == 200
+    run_payload = runs_response.json()[0]
+    assert run_payload["budget_report"]["dependency_summary_tokens"] > 0
+    assert run_payload["budget_report"]["overflow_risk"] is True
+    assert run_payload["budget_report"]["safe_budget"] == 0
+    assert any("budget estimated" in line for line in run_payload["logs"])
 
 
 def test_worker_loop_runs_tasks_in_parallel_with_configured_limit() -> None:

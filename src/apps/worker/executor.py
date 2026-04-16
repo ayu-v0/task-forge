@@ -10,6 +10,7 @@ from src.apps.worker.registry import AgentRegistry
 from src.apps.worker.types import WorkerContext
 from src.packages.core.db.models import AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, TaskORM
 from src.packages.core.task_state_machine import transition_task_status
+from src.packages.core.token_budget import build_budget_report
 
 
 class TaskCancelledError(Exception):
@@ -158,15 +159,25 @@ def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM
         agent_role = db.get(AgentRoleORM, assignment.agent_role_id)
         if agent_role is None:
             return None
+        budget_report = build_budget_report(db, task, agent_role)
         run = ExecutionRunORM(
             task_id=task.id,
             agent_role_id=assignment.agent_role_id,
             run_status="running",
             started_at=_now(),
-            logs=["claimed by worker"],
+            logs=[
+                "claimed by worker",
+                (
+                    "budget estimated: "
+                    f"input={budget_report['estimated_input_tokens']} "
+                    f"reserved_output={budget_report['reserved_output_tokens']} "
+                    f"overflow_risk={budget_report['overflow_risk']}"
+                ),
+            ],
             input_snapshot=task.input_payload,
             output_snapshot={},
             token_usage={},
+            budget_report=budget_report,
         )
         db.add(run)
         db.flush()
@@ -198,6 +209,7 @@ def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM
                     "input_snapshot": task.input_payload,
                     "expected_output_schema": task.expected_output_schema,
                     "dependency_ids": task.dependency_ids,
+                    "budget_report": budget_report,
                     "source": "worker",
                 },
             )

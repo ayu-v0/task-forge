@@ -173,13 +173,15 @@ def test_run_replay_returns_input_output_logs_status_history_and_routing_snapsho
     assert payload["replay_ready"] is True
     assert payload["run"]["id"] == run_id
     assert payload["run"]["output_snapshot"] == {"artifact": "report"}
+    assert payload["run"]["budget_report"]["estimated_input_tokens"] > 0
     assert payload["routing_snapshot"]["run_id"] == run_id
     assert payload["routing_snapshot"]["task_id"] == task_id
     assert payload["routing_snapshot"]["routing_reason"] is not None
     assert payload["routing_snapshot"]["input_snapshot"] == {"text": "hello"}
     assert payload["timeline"]["task_id"] == task_id
     assert any(item["new_status"] == "running" for item in payload["status_history"])
-    assert any(event["event_type"] == "execution_run_replay_snapshot" for event in payload["events"])
+    snapshot_event = next(event for event in payload["events"] if event["event_type"] == "execution_run_replay_snapshot")
+    assert snapshot_event["payload"]["budget_report"] == payload["run"]["budget_report"]
 
 
 def test_run_replay_uses_snapshot_even_if_assignment_changes_later() -> None:
