@@ -200,6 +200,7 @@ def test_worker_executes_queued_task_to_success() -> None:
     assert runs[0]["budget_report"]["estimated_input_tokens"] > 0
     assert runs[0]["budget_report"]["reserved_output_tokens"] >= 256
     assert runs[0]["budget_report"]["overflow_risk"] is False
+    assert runs[0]["budget_report"]["initial_overflow_risk"] is False
     assert runs[0]["budget_report"]["budget_policy"]["template_name"] == "default"
 
     events_response = client.get(f"/tasks/{executed_task_id}/events")
@@ -421,7 +422,7 @@ def test_worker_unlocks_blocked_task_after_dependency_success() -> None:
     assert statuses == ["blocked", "queued"]
 
 
-def test_worker_budget_counts_dependency_summary_and_flags_overflow_risk() -> None:
+def test_worker_trims_context_before_execution_when_budget_overflows() -> None:
     suffix = uuid.uuid4().hex[:8]
     _register_agent(
         client,
@@ -430,7 +431,7 @@ def test_worker_budget_counts_dependency_summary_and_flags_overflow_risk() -> No
         supported_task_types=[],
         declare_schema=False,
         prompt_budget_policy={
-            "template_name": "worker-overflow",
+            "template_name": "worker-trim",
             "model_context_limit": 1024,
             "max_global_background_tokens": 256,
             "max_task_input_tokens": 200000,
@@ -438,7 +439,7 @@ def test_worker_budget_counts_dependency_summary_and_flags_overflow_risk() -> No
             "max_result_summary_tokens": 128,
             "max_validation_rule_tokens": 256,
             "max_history_background_tokens": 64,
-            "reserved_output_tokens": 512,
+            "reserved_output_tokens": 128,
         },
     )
 
@@ -463,7 +464,11 @@ def test_worker_budget_counts_dependency_summary_and_flags_overflow_risk() -> No
                 "title": f"{TEST_PREFIX}budget-{suffix}-2",
                 "task_type": "generate",
                 "priority": "medium",
-                "input_payload": {"text": large_blob},
+                "input_payload": {
+                    "text": large_blob,
+                    "history": [{"role": "user", "content": large_blob}],
+                    "dependencies": [{"artifact": large_blob}],
+                },
                 "expected_output_schema": {"type": "object", "properties": {"summary": {"type": "string"}}},
                 "dependency_client_task_ids": ["task_1"],
             },
@@ -494,10 +499,103 @@ def test_worker_budget_counts_dependency_summary_and_flags_overflow_risk() -> No
     runs_response = client.get(f"/tasks/{dependent_task_id}/runs")
     assert runs_response.status_code == 200
     run_payload = runs_response.json()[0]
-    assert run_payload["budget_report"]["dependency_summary_tokens"] > 0
-    assert run_payload["budget_report"]["overflow_risk"] is True
-    assert run_payload["budget_report"]["safe_budget"] == 0
+    assert run_payload["budget_report"]["initial_overflow_risk"] is True
+    assert run_payload["budget_report"]["overflow_risk"] is False
+    assert run_payload["budget_report"]["trim_applied"] is True
+    assert "removed_irrelevant_history" in run_payload["budget_report"]["trim_steps"]
+    assert "removed_nonessential_dependency_payload" in run_payload["budget_report"]["trim_steps"]
+    assert run_payload["budget_report"]["degradation_mode"] in {"compressed_input", "summary_only", "trimmed_dependencies"}
+    assert run_payload["input_snapshot"] != payload["tasks"][1]["input_payload"]
     assert any("budget estimated" in line for line in run_payload["logs"])
+
+    events = client.get(f"/tasks/{dependent_task_id}/events").json()
+    assert "context_trimmed" in [event["event_type"] for event in events]
+
+
+def test_worker_moves_task_to_review_when_trimming_cannot_fit_budget() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    _register_agent(
+        client,
+        role_name="default_worker",
+        capabilities=["default_worker"],
+        supported_task_types=[],
+        declare_schema=False,
+        prompt_budget_policy={
+            "template_name": "worker-impossible",
+            "model_context_limit": 64,
+            "max_global_background_tokens": 256,
+            "max_task_input_tokens": 256,
+            "max_dependency_summary_tokens": 256,
+            "max_result_summary_tokens": 256,
+            "max_validation_rule_tokens": 256,
+            "max_history_background_tokens": 64,
+            "reserved_output_tokens": 128,
+        },
+    )
+
+    payload = {
+        "title": f"{TEST_PREFIX}review-batch-{suffix}",
+        "description": "review fallback batch",
+        "created_by": "pytest",
+        "metadata": {"suite": "worker-review"},
+        "tasks": [
+            {
+                "client_task_id": "task_1",
+                "title": f"{TEST_PREFIX}review-{suffix}-1",
+                "task_type": "generate",
+                "priority": "medium",
+                "input_payload": {"text": "x" * 4000, "history": ["y" * 4000]},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+            {
+                "client_task_id": "task_2",
+                "title": f"{TEST_PREFIX}review-{suffix}-2",
+                "task_type": "generate",
+                "priority": "medium",
+                "input_payload": {"text": "ok"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+            {
+                "client_task_id": "task_3",
+                "title": f"{TEST_PREFIX}review-{suffix}-3",
+                "task_type": "generate",
+                "priority": "medium",
+                "input_payload": {"text": "ok"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+        ],
+    }
+    response = client.post("/task-batches", json=payload)
+    assert response.status_code == 201
+    task_id = response.json()["tasks"][0]["task_id"]
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        first_attempt = run_next_task(session, build_default_registry())
+        assert first_attempt is None
+
+    task_response = client.get(f"/tasks/{task_id}")
+    assert task_response.status_code == 200
+    assert task_response.json()["status"] == "needs_review"
+
+    runs_response = client.get(f"/tasks/{task_id}/runs")
+    assert runs_response.status_code == 200
+    assert runs_response.json() == []
+
+    reviews_response = client.get(f"/tasks/{task_id}/reviews")
+    assert reviews_response.status_code == 200
+    assert len(reviews_response.json()) == 1
+    assert reviews_response.json()[0]["reason_category"] == "manual_override"
+
+    events = client.get(f"/tasks/{task_id}/events").json()
+    event_types = [event["event_type"] for event in events]
+    assert "review_checkpoint_created" in event_types
+    status_event = [event for event in events if event["event_type"] == "task_status_changed"][-1]
+    assert status_event["event_status"] == "needs_review"
+    assert status_event["payload"]["source"] == "worker"
 
 
 def test_worker_loop_runs_tasks_in_parallel_with_configured_limit() -> None:

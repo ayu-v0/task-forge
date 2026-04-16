@@ -10,7 +10,7 @@ from src.packages.core.db.models import EventLogORM, TaskORM
 TERMINAL_TASK_STATUSES = {"success", "cancelled"}
 TASK_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"queued", "blocked", "needs_review", "cancelled"},
-    "queued": {"running", "cancelled", "blocked"},
+    "queued": {"running", "cancelled", "blocked", "needs_review"},
     "running": {"success", "failed", "needs_review", "cancelled"},
     "blocked": {"queued", "cancelled"},
     "needs_review": {"queued", "blocked", "failed", "cancelled"},

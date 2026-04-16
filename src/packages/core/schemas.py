@@ -35,9 +35,14 @@ class BudgetReportRead(SchemaModel):
     validation_rule_tokens: int = Field(ge=0, default=0)
     history_background_tokens: int = Field(ge=0, default=0)
     estimated_input_tokens: int = Field(ge=0, default=0)
+    initial_estimated_input_tokens: int = Field(ge=0, default=0)
     reserved_output_tokens: int = Field(ge=0, default=0)
     safe_budget: int = Field(ge=0, default=0)
     overflow_risk: bool = False
+    initial_overflow_risk: bool = False
+    trim_applied: bool = False
+    trim_steps: list[str] = Field(default_factory=list)
+    degradation_mode: str = "full_context"
     budget_policy: dict[str, Any] = Field(default_factory=dict)
 
 
