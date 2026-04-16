@@ -85,6 +85,7 @@ def _register_agent(
     capabilities: list[str],
     supported_task_types: list[str],
     declare_schema: bool = True,
+    prompt_budget_policy: dict | None = None,
 ) -> dict:
     input_requirements = {"properties": {"text": {"type": "string"}}}
     output_contract = {"type": "object"}
@@ -111,6 +112,8 @@ def _register_agent(
         "enabled": True,
         "version": "1.0.0",
     }
+    if prompt_budget_policy is not None:
+        payload["prompt_budget_policy"] = prompt_budget_policy
     response = client.post("/agents/register", json=payload)
     assert response.status_code in {201, 400}
     if response.status_code == 400:
@@ -197,6 +200,7 @@ def test_worker_executes_queued_task_to_success() -> None:
     assert runs[0]["budget_report"]["estimated_input_tokens"] > 0
     assert runs[0]["budget_report"]["reserved_output_tokens"] >= 256
     assert runs[0]["budget_report"]["overflow_risk"] is False
+    assert runs[0]["budget_report"]["budget_policy"]["template_name"] == "default"
 
     events_response = client.get(f"/tasks/{executed_task_id}/events")
     assert events_response.status_code == 200
@@ -425,6 +429,17 @@ def test_worker_budget_counts_dependency_summary_and_flags_overflow_risk() -> No
         capabilities=["default_worker"],
         supported_task_types=[],
         declare_schema=False,
+        prompt_budget_policy={
+            "template_name": "worker-overflow",
+            "model_context_limit": 1024,
+            "max_global_background_tokens": 256,
+            "max_task_input_tokens": 200000,
+            "max_dependency_summary_tokens": 256,
+            "max_result_summary_tokens": 128,
+            "max_validation_rule_tokens": 256,
+            "max_history_background_tokens": 64,
+            "reserved_output_tokens": 512,
+        },
     )
 
     large_blob = "x" * 600000

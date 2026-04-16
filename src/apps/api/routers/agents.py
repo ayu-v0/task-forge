@@ -12,6 +12,7 @@ from src.packages.core.costs import estimate_cost
 from src.packages.core.schemas import (
     AgentCapabilityDeclaration,
     AgentRoleDetailRead,
+    PromptBudgetPolicyRead,
     AgentRegistryDiagnosisRead,
     AgentRegistryListItemRead,
     AgentRegistryResponse,
@@ -32,6 +33,10 @@ def _build_capability_declaration(agent_role: AgentRoleORM) -> AgentCapabilityDe
     )
 
 
+def _build_prompt_budget_policy(agent_role: AgentRoleORM) -> PromptBudgetPolicyRead:
+    return PromptBudgetPolicyRead.model_validate(agent_role.input_schema.get("prompt_budget_policy") or {})
+
+
 def _to_agent_detail(agent_role: AgentRoleORM) -> AgentRoleDetailRead:
     return AgentRoleDetailRead(
         id=agent_role.id,
@@ -39,6 +44,7 @@ def _to_agent_detail(agent_role: AgentRoleORM) -> AgentRoleDetailRead:
         description=agent_role.description,
         capabilities=agent_role.capabilities,
         capability_declaration=_build_capability_declaration(agent_role),
+        prompt_budget_policy=_build_prompt_budget_policy(agent_role),
         input_schema=agent_role.input_schema,
         output_schema=agent_role.output_schema,
         timeout_seconds=agent_role.timeout_seconds,
@@ -65,6 +71,7 @@ def _to_agent_registry_item(
         description=agent_role.description,
         capabilities=agent_role.capabilities,
         capability_declaration=_build_capability_declaration(agent_role),
+        prompt_budget_policy=_build_prompt_budget_policy(agent_role),
         input_schema=agent_role.input_schema,
         output_schema=agent_role.output_schema,
         enabled=agent_role.enabled,
@@ -88,12 +95,14 @@ def _to_agent_registry_item(
 def _merge_input_schema(
     base_schema: dict,
     capability_declaration: AgentCapabilityDeclaration,
+    prompt_budget_policy: PromptBudgetPolicyRead,
 ) -> dict:
     merged = dict(base_schema)
     merged["supported_task_types"] = capability_declaration.supported_task_types
     merged["input_requirements"] = capability_declaration.input_requirements
     merged["supports_concurrency"] = capability_declaration.supports_concurrency
     merged["allows_auto_retry"] = capability_declaration.allows_auto_retry
+    merged["prompt_budget_policy"] = prompt_budget_policy.model_dump()
     return merged
 
 
@@ -168,7 +177,7 @@ def register_agent(
         role_name=payload.role_name,
         description=payload.description,
         capabilities=payload.capabilities,
-        input_schema=_merge_input_schema(payload.input_schema, payload.capability_declaration),
+        input_schema=_merge_input_schema(payload.input_schema, payload.capability_declaration, payload.prompt_budget_policy),
         output_schema=_merge_output_schema(payload.output_schema, payload.capability_declaration),
         timeout_seconds=payload.timeout_seconds,
         max_retries=payload.max_retries,
@@ -298,10 +307,11 @@ def update_agent(
         agent_role.version = update_data["version"]
 
     capability_declaration = payload.capability_declaration or _build_capability_declaration(agent_role)
+    prompt_budget_policy = payload.prompt_budget_policy or _build_prompt_budget_policy(agent_role)
 
-    if "input_schema" in update_data or "capability_declaration" in update_data:
+    if "input_schema" in update_data or "capability_declaration" in update_data or "prompt_budget_policy" in update_data:
         base_input_schema = update_data.get("input_schema", agent_role.input_schema)
-        agent_role.input_schema = _merge_input_schema(base_input_schema, capability_declaration)
+        agent_role.input_schema = _merge_input_schema(base_input_schema, capability_declaration, prompt_budget_policy)
 
     if "output_schema" in update_data or "capability_declaration" in update_data:
         base_output_schema = update_data.get("output_schema", agent_role.output_schema)

@@ -52,6 +52,17 @@ def _payload() -> dict:
             "supports_concurrency": True,
             "allows_auto_retry": True,
         },
+        "prompt_budget_policy": {
+            "template_name": "planner",
+            "model_context_limit": 64000,
+            "max_global_background_tokens": 2000,
+            "max_task_input_tokens": 1200,
+            "max_dependency_summary_tokens": 300,
+            "max_result_summary_tokens": 100,
+            "max_validation_rule_tokens": 800,
+            "max_history_background_tokens": 150,
+            "reserved_output_tokens": 900,
+        },
         "input_schema": {"schema_version": "1"},
         "output_schema": {"schema_version": "1"},
         "timeout_seconds": 300,
@@ -86,6 +97,8 @@ def test_register_list_get_and_disable_agent() -> None:
     assert registered["role_name"] == payload["role_name"]
     assert registered["capability_declaration"]["supported_task_types"] == ["generate"]
     assert registered["capability_declaration"]["supports_concurrency"] is True
+    assert registered["prompt_budget_policy"]["template_name"] == "planner"
+    assert registered["prompt_budget_policy"]["max_global_background_tokens"] == 2000
     assert registered["enabled"] is True
 
     list_response = client.get("/agents")
@@ -98,19 +111,37 @@ def test_register_list_get_and_disable_agent() -> None:
     fetched = get_response.json()
     assert fetched["role_name"] == payload["role_name"]
     assert fetched["input_schema"]["schema_version"] == "1"
+    assert fetched["prompt_budget_policy"]["reserved_output_tokens"] == 900
 
     patch_response = client.patch(
         f"/agents/{registered['id']}",
-        json={"enabled": False, "description": "Disabled role"},
+        json={
+            "enabled": False,
+            "description": "Disabled role",
+            "prompt_budget_policy": {
+                "template_name": "reviewer",
+                "model_context_limit": 96000,
+                "max_global_background_tokens": 300,
+                "max_task_input_tokens": 600,
+                "max_dependency_summary_tokens": 200,
+                "max_result_summary_tokens": 2400,
+                "max_validation_rule_tokens": 1800,
+                "max_history_background_tokens": 50,
+                "reserved_output_tokens": 700,
+            },
+        },
     )
     assert patch_response.status_code == 200
     patched = patch_response.json()
     assert patched["enabled"] is False
     assert patched["description"] == "Disabled role"
+    assert patched["prompt_budget_policy"]["template_name"] == "reviewer"
+    assert patched["prompt_budget_policy"]["max_result_summary_tokens"] == 2400
 
     get_after_patch = client.get(f"/agents/{registered['id']}")
     assert get_after_patch.status_code == 200
     assert get_after_patch.json()["enabled"] is False
+    assert get_after_patch.json()["prompt_budget_policy"]["reserved_output_tokens"] == 700
 
 
 def test_register_rejects_duplicate_role_name() -> None:
