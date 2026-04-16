@@ -15,6 +15,7 @@ from src.packages.core.schemas import PromptBudgetPolicyRead
 JSON_SEPARATORS = (",", ":")
 HISTORY_KEYS = {"history", "messages", "conversation", "previous_runs", "history_background"}
 DEPENDENCY_KEYS = {"dependencies", "dependency_details", "upstream_outputs", "dependency_context"}
+SYSTEM_SUMMARY_KEYS = {"task_summary", "downstream_summary", "result_summary"}
 LONG_STRING_LIMIT = 512
 SUMMARY_STRING_LIMIT = 160
 MIN_GLOBAL_BACKGROUND_TOKENS = 32
@@ -81,37 +82,67 @@ def _dependency_records(db: Session, task: TaskORM) -> list[dict[str, Any]]:
     return records
 
 
+def _strip_system_summary_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
+    cleaned = deepcopy(payload or {})
+    for key in SYSTEM_SUMMARY_KEYS:
+        cleaned.pop(key, None)
+    return cleaned
+
+
+def _structured_shape(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {
+            "kind": "object",
+            "keys": sorted(value.keys()),
+            "field_count": len(value),
+        }
+    if isinstance(value, list):
+        return {
+            "kind": "array",
+            "item_count": len(value),
+        }
+    if isinstance(value, str):
+        return {
+            "kind": "string",
+            "length": len(value),
+        }
+    return {
+        "kind": type(value).__name__,
+    }
+
+
 def _dependency_summary_source(db: Session, task: TaskORM) -> str:
-    records = _dependency_records(db, task)
+    records = build_downstream_summary(db, task)
     if not records:
         return ""
-    summary = [
-        {
-            "task_id": item["task_id"],
-            "title": item["title"],
-            "status": item["status"],
-            "assigned_agent_role": item["assigned_agent_role"],
-            "latest_output_keys": item["latest_output_keys"],
-            "latest_run_status": item["latest_run_status"],
-        }
-        for item in records
-    ]
-    return _stable_json(summary)
+    return _stable_json(
+        [
+            {
+                "task_id": item["task_id"],
+                "title": item["title"],
+                "status": item["status"],
+                "assigned_agent_role": item["assigned_agent_role"],
+                "latest_run_status": item["latest_run_status"],
+            }
+            for item in records
+        ]
+    )
 
 
 def _result_summary_source(db: Session, task: TaskORM) -> str:
-    records = _dependency_records(db, task)
+    records = build_downstream_summary(db, task)
     if not records:
         return ""
-    summary = [
-        {
-            "task_id": item["task_id"],
-            "latest_output": item["latest_output"],
-        }
-        for item in records
-        if item["latest_output"]
-    ]
-    return _stable_json(summary)
+    return _stable_json(
+        [
+            {
+                "task_id": item["task_id"],
+                "result_summary": item["result_summary"],
+            }
+            for item in records
+            if item["result_summary"]
+        ]
+    )
 
 
 def _validation_rules_source(task: TaskORM, agent_role: AgentRoleORM) -> str:
@@ -163,6 +194,57 @@ def _build_summary(value: Any) -> Any:
     return value
 
 
+def build_task_summary(payload: dict[str, Any] | None) -> dict[str, Any]:
+    base_payload = _strip_system_summary_fields(payload)
+    return {
+        "summary": _build_summary(base_payload),
+        "structured_result": _structured_shape(base_payload),
+    }
+
+
+def build_result_summary(payload: dict[str, Any] | None) -> dict[str, Any]:
+    base_payload = _strip_system_summary_fields(payload)
+    return {
+        "summary": _build_summary(base_payload),
+        "structured_result": _structured_shape(base_payload),
+    }
+
+
+def build_downstream_summary(db: Session, task: TaskORM) -> list[dict[str, Any]]:
+    records = _dependency_records(db, task)
+    downstream: list[dict[str, Any]] = []
+    for item in records:
+        latest_output = _strip_system_summary_fields(item["latest_output"])
+        persisted_result_summary = item["latest_output"].get("result_summary") if item["latest_output"] else None
+        result_summary = (
+            persisted_result_summary
+            if isinstance(persisted_result_summary, dict)
+            else build_result_summary(latest_output)
+            if latest_output
+            else {}
+        )
+        downstream.append(
+            {
+                "task_id": item["task_id"],
+                "title": item["title"],
+                "status": item["status"],
+                "assigned_agent_role": item["assigned_agent_role"],
+                "latest_run_status": item["latest_run_status"],
+                "result_summary": result_summary,
+            }
+        )
+    return downstream
+
+
+def build_augmented_input_payload(db: Session, task: TaskORM) -> dict[str, Any]:
+    payload = _strip_system_summary_fields(task.input_payload or {})
+    payload["task_summary"] = build_task_summary(payload)
+    downstream_summary = build_downstream_summary(db, task)
+    if downstream_summary:
+        payload["downstream_summary"] = downstream_summary
+    return payload
+
+
 def _trim_long_strings(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _trim_long_strings(item) for key, item in value.items()}
@@ -187,13 +269,7 @@ def _remove_keys(payload: dict[str, Any], keys: set[str]) -> tuple[dict[str, Any
 
 
 def _summary_only_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "summary": _build_summary(payload),
-        "structured_result": {
-            "keys": sorted(payload.keys()),
-            "field_count": len(payload),
-        },
-    }
+    return build_task_summary(payload)
 
 
 def _section_counts(
@@ -254,7 +330,7 @@ def _section_counts(
 
 def build_execution_budget(db: Session, task: TaskORM, agent_role: AgentRoleORM) -> dict[str, Any]:
     policy = _load_policy(agent_role)
-    trimmed_payload = deepcopy(task.input_payload or {})
+    trimmed_payload = build_augmented_input_payload(db, task)
     trim_steps: list[str] = []
     degradation_mode = "full_context"
     history_cap = policy.max_history_background_tokens

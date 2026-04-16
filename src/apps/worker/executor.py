@@ -10,7 +10,7 @@ from src.apps.worker.registry import AgentRegistry
 from src.apps.worker.types import WorkerContext
 from src.packages.core.db.models import AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, ReviewCheckpointORM, TaskORM
 from src.packages.core.task_state_machine import transition_task_status
-from src.packages.core.token_budget import build_execution_budget
+from src.packages.core.token_budget import build_execution_budget, build_result_summary
 
 
 class TaskCancelledError(Exception):
@@ -346,9 +346,12 @@ def mark_run_success(
     if task.cancellation_requested:
         return mark_run_cancelled(db, task_id, run_id, task.cancellation_reason or "task cancellation requested")
 
+    final_result = dict(result)
+    final_result.setdefault("result_summary", build_result_summary(final_result))
+
     run.run_status = "success"
     run.finished_at = _now()
-    run.output_snapshot = result
+    run.output_snapshot = final_result
     run.latency_ms = latency_ms
     run.logs = [*run.logs, "execution finished"]
 

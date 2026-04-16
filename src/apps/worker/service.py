@@ -15,7 +15,7 @@ from src.packages.core.db.models import (
     TaskORM,
 )
 from src.packages.core.task_state_machine import transition_task_status
-from src.packages.core.token_budget import build_execution_budget
+from src.packages.core.token_budget import build_execution_budget, build_result_summary
 
 
 class WorkerService:
@@ -93,6 +93,7 @@ class WorkerService:
         execution_budget = build_execution_budget(self.db, task, agent_role)
         budget_report = execution_budget["budget_report"]
         task_input_payload = execution_budget["trimmed_input_payload"]
+        task.input_payload = task_input_payload
 
         run = ExecutionRunORM(
             task_id=task.id,
@@ -137,9 +138,12 @@ class WorkerService:
                 },
             )
             finished_at = datetime.now(timezone.utc)
+            final_result = dict(result)
+            final_result.setdefault("result_summary", build_result_summary(final_result))
+
             run.run_status = "succeeded"
             run.finished_at = finished_at
-            run.output_snapshot = result
+            run.output_snapshot = final_result
             run.logs = [*run.logs, "Execution completed successfully"]
             run.latency_ms = max(int((finished_at - started_at).total_seconds() * 1000), 0)
             assignment.assignment_status = "fulfilled"

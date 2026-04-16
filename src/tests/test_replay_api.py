@@ -189,12 +189,14 @@ def test_run_replay_returns_input_output_logs_status_history_and_routing_snapsho
     payload = replay_response.json()
     assert payload["replay_ready"] is True
     assert payload["run"]["id"] == run_id
-    assert payload["run"]["output_snapshot"] == {"artifact": "report"}
+    assert payload["run"]["output_snapshot"]["artifact"] == "report"
+    assert payload["run"]["output_snapshot"]["result_summary"]["structured_result"]["kind"] == "object"
     assert payload["run"]["budget_report"]["estimated_input_tokens"] > 0
     assert payload["routing_snapshot"]["run_id"] == run_id
     assert payload["routing_snapshot"]["task_id"] == task_id
     assert payload["routing_snapshot"]["routing_reason"] is not None
-    assert payload["routing_snapshot"]["input_snapshot"] == {"text": "hello"}
+    assert payload["routing_snapshot"]["input_snapshot"]["text"] == "hello"
+    assert payload["routing_snapshot"]["input_snapshot"]["task_summary"]["structured_result"]["kind"] == "object"
     assert payload["timeline"]["task_id"] == task_id
     assert any(item["new_status"] == "running" for item in payload["status_history"])
     snapshot_event = next(event for event in payload["events"] if event["event_type"] == "execution_run_replay_snapshot")
@@ -317,3 +319,35 @@ def test_run_replay_shows_trimmed_input_snapshot_when_context_was_reduced() -> N
     assert replay["run"]["budget_report"]["trim_applied"] is True
     assert replay["routing_snapshot"]["input_snapshot"] == replay["run"]["input_snapshot"]
     assert replay["run"]["input_snapshot"] != {"text": "x" * 600000}
+
+
+def test_run_replay_shows_downstream_summary_instead_of_full_dependency_output() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    _register_agent(client, role_name=f"{TEST_PREFIX}worker-{suffix}", supported_task_types=["generate"])
+    response = client.post("/task-batches", json=_batch_payload("generate", suffix))
+    assert response.status_code == 201
+    dependent_task_id = response.json()["tasks"][1]["task_id"]
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        first_claim = claim_next_task(session)
+        assert first_claim is not None
+        upstream_task, upstream_run, _agent_role = first_claim
+        mark_run_success(session, upstream_task.id, upstream_run.id, {"artifact": "x" * 4000}, 100)
+        session.commit()
+
+    with Session(engine) as session:
+        second_claim = claim_next_task(session)
+        assert second_claim is not None
+        task, run, _agent_role = second_claim
+        assert task.id == dependent_task_id
+        session.commit()
+        run_id = run.id
+
+    replay_response = client.get(f"/runs/{run_id}/replay")
+    assert replay_response.status_code == 200
+    replay = replay_response.json()
+    downstream_summary = replay["routing_snapshot"]["input_snapshot"]["downstream_summary"]
+    assert len(downstream_summary) == 1
+    assert downstream_summary[0]["result_summary"]["summary"]["artifact"].endswith("[summary len=4000]")
+    assert "latest_output" not in downstream_summary[0]

@@ -157,6 +157,15 @@ class SlowAgent:
                 self.active -= 1
 
 
+class LongResultAgent:
+    def run(self, task: TaskORM, context) -> dict:
+        return {
+            "status": "ok",
+            "task_id": task.id,
+            "artifact": "z" * 4000,
+        }
+
+
 def setup_function() -> None:
     _cleanup_database()
 
@@ -248,9 +257,68 @@ def test_worker_failure_preserves_context() -> None:
     runs = runs_response.json()
     assert len(runs) == 1
     assert runs[0]["run_status"] == "failed"
-    assert runs[0]["input_snapshot"] == {"text": "hello"}
+    assert runs[0]["input_snapshot"]["text"] == "hello"
+    assert runs[0]["input_snapshot"]["task_summary"]["structured_result"]["kind"] == "object"
     assert "intentional failure" in runs[0]["error_message"]
     assert any("execution failed" in line for line in runs[0]["logs"])
+
+
+def test_worker_injects_task_summary_into_execution_input() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    _register_agent(
+        client,
+        role_name="default_worker",
+        capabilities=["default_worker"],
+        supported_task_types=[],
+        declare_schema=False,
+    )
+
+    payload = _batch_payload("generate", suffix)
+    payload["tasks"][0]["input_payload"] = {
+        "text": "x" * 4000,
+        "notes": ["a", "b", "c"],
+    }
+    response = client.post("/task-batches", json=payload)
+    assert response.status_code == 201
+    task_id = response.json()["tasks"][0]["task_id"]
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        run = run_next_task(session, build_default_registry())
+        assert run is not None
+
+    run_payload = client.get(f"/tasks/{task_id}/runs").json()[0]
+    assert run_payload["input_snapshot"]["text"] == "x" * 4000
+    assert run_payload["input_snapshot"]["task_summary"]["structured_result"]["kind"] == "object"
+    assert run_payload["input_snapshot"]["task_summary"]["summary"]["text"].endswith("[summary len=4000]")
+
+
+def test_worker_persists_result_summary_for_long_outputs() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role_name = f"{TEST_PREFIX}long-result-{suffix}"
+    _register_agent(
+        client,
+        role_name=role_name,
+        capabilities=[f"task:{role_name}"],
+        supported_task_types=[role_name],
+    )
+
+    response = client.post("/task-batches", json=_batch_payload(role_name, suffix))
+    assert response.status_code == 201
+    task_id = response.json()["tasks"][0]["task_id"]
+
+    registry = AgentRegistry()
+    registry.register(role_name, LongResultAgent())
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        run = run_next_task(session, registry)
+        assert run is not None
+
+    run_payload = client.get(f"/tasks/{task_id}/runs").json()[0]
+    assert run_payload["output_snapshot"]["artifact"] == "z" * 4000
+    assert run_payload["output_snapshot"]["result_summary"]["structured_result"]["kind"] == "object"
+    assert run_payload["output_snapshot"]["result_summary"]["summary"]["artifact"].endswith("[summary len=4000]")
 
 
 def test_get_run_returns_saved_execution_run() -> None:
@@ -420,6 +488,77 @@ def test_worker_unlocks_blocked_task_after_dependency_success() -> None:
         if event["event_type"] == "task_status_changed"
     ]
     assert statuses == ["blocked", "queued"]
+
+
+def test_worker_injects_downstream_summary_for_dependency_handoffs() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role_name = f"{TEST_PREFIX}downstream-{suffix}"
+    _register_agent(
+        client,
+        role_name=role_name,
+        capabilities=[f"task:{role_name}"],
+        supported_task_types=[role_name],
+    )
+
+    payload = {
+        "title": f"{TEST_PREFIX}handoff-batch-{suffix}",
+        "description": "downstream summary batch",
+        "created_by": "pytest",
+        "metadata": {"suite": "worker-downstream"},
+        "tasks": [
+            {
+                "client_task_id": "task_1",
+                "title": f"{TEST_PREFIX}handoff-{suffix}-1",
+                "task_type": role_name,
+                "priority": "medium",
+                "input_payload": {"text": "seed"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+            {
+                "client_task_id": "task_2",
+                "title": f"{TEST_PREFIX}handoff-{suffix}-2",
+                "task_type": role_name,
+                "priority": "medium",
+                "input_payload": {"text": "consumer"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": ["task_1"],
+            },
+            {
+                "client_task_id": "task_3",
+                "title": f"{TEST_PREFIX}handoff-{suffix}-3",
+                "task_type": role_name,
+                "priority": "medium",
+                "input_payload": {"text": "tail"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+        ],
+    }
+    response = client.post("/task-batches", json=payload)
+    assert response.status_code == 201
+    task_ids = [task["task_id"] for task in response.json()["tasks"]]
+    dependent_task_id = task_ids[1]
+
+    registry = AgentRegistry()
+    registry.register(role_name, LongResultAgent())
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        first_run = run_next_task(session, registry)
+        assert first_run is not None
+    with Session(engine) as session:
+        second_run = run_next_task(session, registry)
+        assert second_run is not None
+        assert second_run.task_id == dependent_task_id
+
+    dependent_run = client.get(f"/tasks/{dependent_task_id}/runs").json()[0]
+    downstream_summary = dependent_run["input_snapshot"]["downstream_summary"]
+    assert len(downstream_summary) == 1
+    assert downstream_summary[0]["task_id"] == task_ids[0]
+    assert downstream_summary[0]["result_summary"]["structured_result"]["kind"] == "object"
+    assert downstream_summary[0]["result_summary"]["summary"]["artifact"].endswith("[summary len=4000]")
+    assert "latest_output" not in downstream_summary[0]
 
 
 def test_worker_trims_context_before_execution_when_budget_overflows() -> None:
