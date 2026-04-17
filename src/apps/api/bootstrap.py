@@ -7,6 +7,18 @@ from src.apps.api.deps import engine
 from src.packages.core.db.models import AgentRoleORM
 
 
+STRUCTURED_OUTPUT_CONTRACT = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string"},
+        "summary": {"type": "string"},
+        "result": {"type": "object"},
+        "warnings": {"type": "array"},
+        "next_action_hint": {"type": ["string", "null"]},
+    },
+}
+
+
 BUILTIN_ROLES: tuple[dict, ...] = (
     {
         "role_name": "search_agent",
@@ -29,7 +41,7 @@ BUILTIN_ROLES: tuple[dict, ...] = (
                 "reserved_output_tokens": 512,
             },
         },
-        "output_schema": {"output_contract": {"type": "object"}},
+        "output_schema": {"output_contract": STRUCTURED_OUTPUT_CONTRACT},
     },
     {
         "role_name": "code_agent",
@@ -57,7 +69,7 @@ BUILTIN_ROLES: tuple[dict, ...] = (
                 "reserved_output_tokens": 768,
             },
         },
-        "output_schema": {"output_contract": {"type": "object"}},
+        "output_schema": {"output_contract": STRUCTURED_OUTPUT_CONTRACT},
     },
     {
         "role_name": "planner_agent",
@@ -79,7 +91,7 @@ BUILTIN_ROLES: tuple[dict, ...] = (
                 "reserved_output_tokens": 1024,
             },
         },
-        "output_schema": {},
+        "output_schema": {"output_contract": STRUCTURED_OUTPUT_CONTRACT},
     },
     {
         "role_name": "worker_agent",
@@ -101,7 +113,7 @@ BUILTIN_ROLES: tuple[dict, ...] = (
                 "reserved_output_tokens": 768,
             },
         },
-        "output_schema": {},
+        "output_schema": {"output_contract": STRUCTURED_OUTPUT_CONTRACT},
     },
     {
         "role_name": "reviewer_agent",
@@ -123,7 +135,7 @@ BUILTIN_ROLES: tuple[dict, ...] = (
                 "reserved_output_tokens": 512,
             },
         },
-        "output_schema": {},
+        "output_schema": {"output_contract": STRUCTURED_OUTPUT_CONTRACT},
     },
 )
 

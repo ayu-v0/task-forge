@@ -166,6 +166,12 @@ def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
         planner_run = next(item for item in run_details if item["output_snapshot"].get("stage") == "planner")
         worker_run = next(item for item in run_details if item["output_snapshot"].get("stage") == "worker")
         reviewer_run = next(item for item in run_details if item["output_snapshot"].get("stage") == "reviewer")
+        for run_payload in (planner_run, worker_run, reviewer_run):
+            assert "status" in run_payload["output_snapshot"]
+            assert "summary" in run_payload["output_snapshot"]
+            assert "result" in run_payload["output_snapshot"]
+            assert "warnings" in run_payload["output_snapshot"]
+            assert "next_action_hint" in run_payload["output_snapshot"]
         assert planner_run["budget_report"]["budget_policy"]["template_name"] == "planner"
         assert planner_run["budget_report"]["global_background_tokens"] > planner_run["budget_report"]["dependency_summary_tokens"]
         assert worker_run["budget_report"]["budget_policy"]["template_name"] == "worker"
@@ -177,6 +183,8 @@ def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
         assert reviewer_run["budget_report"]["budget_policy"]["template_name"] == "reviewer"
         assert reviewer_run["budget_report"]["result_summary_tokens"] > 0
         assert reviewer_run["budget_report"]["validation_rule_tokens"] > reviewer_run["budget_report"]["history_background_tokens"]
+        assert reviewer_entry["capability_declaration"]["output_contract"]["properties"]["summary"]["type"] == "string"
+        assert reviewer_entry["capability_declaration"]["output_contract"]["properties"]["result"]["type"] == "object"
 
         assert run_body["task_id"] == reviewer_task_id
         assert run_body["output_snapshot"]["stage"] == "reviewer"

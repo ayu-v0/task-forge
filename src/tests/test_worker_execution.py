@@ -768,6 +768,44 @@ def test_worker_moves_task_to_review_when_trimming_cannot_fit_budget() -> None:
     assert status_event["payload"]["source"] == "worker"
 
 
+def test_reviewer_builtin_can_consume_structured_output_without_raw_output() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    task_type = "reviewer_validate"
+    _register_agent(
+        client,
+        role_name="reviewer_agent",
+        capabilities=["task:reviewer_validate"],
+        supported_task_types=[task_type],
+        declare_schema=False,
+    )
+
+    payload = _batch_payload(task_type, suffix)
+    payload["tasks"][0]["input_payload"] = {
+        "structured_output": {
+            "status": "ok",
+            "summary": "worker completed",
+            "result": {"artifact": "report"},
+            "warnings": [],
+            "next_action_hint": "approve",
+        }
+    }
+    response = client.post("/task-batches", json=payload)
+    assert response.status_code == 201
+    task_id = response.json()["tasks"][0]["task_id"]
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        run = run_next_task(session, build_default_registry())
+        assert run is not None
+        assert run.task_id == task_id
+
+    run_payload = client.get(f"/tasks/{task_id}/runs").json()[0]
+    assert run_payload["output_snapshot"]["stage"] == "reviewer"
+    assert run_payload["output_snapshot"]["validation_passed"] is True
+    assert run_payload["output_snapshot"]["needs_manual_review"] is False
+    assert run_payload["output_snapshot"]["result"]["reviewed_output"]["result"]["artifact"] == "report"
+
+
 def test_worker_loop_runs_tasks_in_parallel_with_configured_limit() -> None:
     suffix = uuid.uuid4().hex[:8]
     role_name = f"{TEST_PREFIX}slow-{suffix}"
