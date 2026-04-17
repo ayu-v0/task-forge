@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.packages.core.db.models import AgentRoleORM, ExecutionRunORM, TaskORM
+from src.packages.core.db.models import AgentRoleORM, ArtifactORM, ExecutionRunORM, TaskORM
 from src.packages.core.schemas import PromptBudgetPolicyRead
 
 
@@ -215,11 +215,25 @@ def build_downstream_summary(db: Session, task: TaskORM) -> list[dict[str, Any]]
     downstream: list[dict[str, Any]] = []
     for item in records:
         latest_output = _strip_system_summary_fields(item["latest_output"])
+        latest_artifact = db.scalars(
+            select(ArtifactORM)
+            .where(ArtifactORM.task_id == item["task_id"])
+            .order_by(ArtifactORM.created_at.desc(), ArtifactORM.id.desc())
+        ).first()
         persisted_result_summary = item["latest_output"].get("result_summary") if item["latest_output"] else None
         result_summary = (
-            persisted_result_summary
+            latest_artifact.summary
+            if latest_artifact is not None and latest_artifact.summary
+            else persisted_result_summary
             if isinstance(persisted_result_summary, dict)
             else build_result_summary(latest_output)
+            if latest_output
+            else {}
+        )
+        structured_output = (
+            latest_artifact.structured_output
+            if latest_artifact is not None and latest_artifact.structured_output
+            else _build_summary(latest_output)
             if latest_output
             else {}
         )
@@ -231,6 +245,7 @@ def build_downstream_summary(db: Session, task: TaskORM) -> list[dict[str, Any]]
                 "assigned_agent_role": item["assigned_agent_role"],
                 "latest_run_status": item["latest_run_status"],
                 "result_summary": result_summary,
+                "structured_output": structured_output,
             }
         )
     return downstream

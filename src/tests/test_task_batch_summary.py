@@ -280,6 +280,47 @@ def test_summary_aggregates_latest_run_and_artifacts() -> None:
     assert task_summary["artifact_count"] == 1
     assert task_summary["error_category"] is None
     assert len(payload["artifacts"]) == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["artifact_type"] == "report"
+    assert artifact["uri"] == "memory://report.json"
+    assert artifact["raw_content"] == {}
+    assert artifact["summary"] == {}
+    assert artifact["structured_output"] == {}
+    assert artifact["metadata"] == {}
+    assert artifact["schema_version"] == "artifact.v1"
+
+
+def test_summary_returns_standardized_artifact_fields_for_auto_persisted_artifacts() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role_name = f"{TEST_PREFIX}worker-{suffix}"
+    _register_agent(client, role_name=role_name, supported_task_types=["generate"])
+
+    response = client.post("/task-batches", json=_batch_payload("generate", suffix))
+    assert response.status_code == 201
+    batch_id = response.json()["batch_id"]
+
+    engine = create_engine(_database_url())
+    registry = AgentRegistry()
+    registry.register(role_name, SummaryAgent())
+    with Session(engine) as session:
+        first_run = run_next_task(session, registry)
+        second_run = run_next_task(session, registry)
+        third_run = run_next_task(session, registry)
+        assert first_run is not None
+        assert second_run is not None
+        assert third_run is not None
+
+    summary_response = client.get(f"/task-batches/{batch_id}/summary")
+    assert summary_response.status_code == 200
+    payload = summary_response.json()
+    assert len(payload["artifacts"]) == 3
+    first_artifact = payload["artifacts"][0]
+    assert first_artifact["artifact_type"] == "json"
+    assert first_artifact["raw_content"]["status"] == "ok"
+    assert first_artifact["summary"]["structured_result"]["kind"] == "object"
+    assert first_artifact["structured_output"]["status"] == "ok"
+    assert first_artifact["metadata"]["source"] == "execution_run"
+    assert first_artifact["schema_version"] == "artifact.v1"
 
 
 def test_summary_groups_failure_categories_from_latest_task_context() -> None:

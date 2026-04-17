@@ -128,7 +128,7 @@ from src.apps.api.app import app  # noqa: E402
 from src.apps.worker.executor import run_next_task  # noqa: E402
 from src.apps.worker.loop import run_worker_loop  # noqa: E402
 from src.apps.worker.registry import AgentRegistry, build_default_registry  # noqa: E402
-from src.packages.core.db.models import ExecutionRunORM, TaskORM  # noqa: E402
+from src.packages.core.db.models import ArtifactORM, ExecutionRunORM, TaskORM  # noqa: E402
 
 
 client = TestClient(app)
@@ -319,6 +319,37 @@ def test_worker_persists_result_summary_for_long_outputs() -> None:
     assert run_payload["output_snapshot"]["artifact"] == "z" * 4000
     assert run_payload["output_snapshot"]["result_summary"]["structured_result"]["kind"] == "object"
     assert run_payload["output_snapshot"]["result_summary"]["summary"]["artifact"].endswith("[summary len=4000]")
+
+
+def test_worker_persists_standardized_artifact_for_successful_run() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role_name = f"{TEST_PREFIX}artifact-{suffix}"
+    _register_agent(
+        client,
+        role_name=role_name,
+        capabilities=[f"task:{role_name}"],
+        supported_task_types=[role_name],
+    )
+
+    response = client.post("/task-batches", json=_batch_payload(role_name, suffix))
+    assert response.status_code == 201
+    task_id = response.json()["tasks"][0]["task_id"]
+
+    registry = AgentRegistry()
+    registry.register(role_name, LongResultAgent())
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        run = run_next_task(session, registry)
+        assert run is not None
+        artifact = session.query(ArtifactORM).filter(ArtifactORM.run_id == run.id).one()
+        assert artifact.task_id == task_id
+        assert artifact.artifact_type == "json"
+        assert artifact.uri.startswith("memory://artifacts/")
+        assert artifact.raw_content["artifact"] == "z" * 4000
+        assert artifact.summary["structured_result"]["kind"] == "object"
+        assert artifact.structured_output["artifact"].endswith("[summary len=4000]")
+        assert artifact.schema_version == "artifact.v1"
 
 
 def test_get_run_returns_saved_execution_run() -> None:

@@ -7,6 +7,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from src.apps.worker.registry import get_worker_agent
+from src.packages.core.artifact_store import create_run_artifact
 from src.packages.core.db.models import (
     AgentRoleORM,
     AssignmentORM,
@@ -146,6 +147,12 @@ class WorkerService:
             run.output_snapshot = final_result
             run.logs = [*run.logs, "Execution completed successfully"]
             run.latency_ms = max(int((finished_at - started_at).total_seconds() * 1000), 0)
+            create_run_artifact(
+                self.db,
+                task_id=task.id,
+                run_id=run.id,
+                result=final_result,
+            )
             assignment.assignment_status = "fulfilled"
             transition_task_status(
                 self.db,

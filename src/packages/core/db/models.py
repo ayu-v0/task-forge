@@ -147,7 +147,11 @@ class ArtifactORM(Base):
     artifact_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     uri: Mapped[str] = mapped_column(Text, nullable=False)
     content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    raw_content: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    summary: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    structured_output: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="artifact.v1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     task: Mapped["TaskORM | None"] = relationship(back_populates="artifacts")

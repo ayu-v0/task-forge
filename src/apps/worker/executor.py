@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from src.apps.worker.registry import AgentRegistry
 from src.apps.worker.types import WorkerContext
+from src.packages.core.artifact_store import create_run_artifact
 from src.packages.core.db.models import AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, ReviewCheckpointORM, TaskORM
 from src.packages.core.task_state_machine import transition_task_status
 from src.packages.core.token_budget import build_execution_budget, build_result_summary
@@ -354,6 +355,12 @@ def mark_run_success(
     run.output_snapshot = final_result
     run.latency_ms = latency_ms
     run.logs = [*run.logs, "execution finished"]
+    create_run_artifact(
+        db,
+        task_id=task.id,
+        run_id=run.id,
+        result=final_result,
+    )
 
     transition_task_status(
         db,

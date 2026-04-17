@@ -350,4 +350,5 @@ def test_run_replay_shows_downstream_summary_instead_of_full_dependency_output()
     downstream_summary = replay["routing_snapshot"]["input_snapshot"]["downstream_summary"]
     assert len(downstream_summary) == 1
     assert downstream_summary[0]["result_summary"]["summary"]["artifact"].endswith("[summary len=4000]")
+    assert downstream_summary[0]["structured_output"]["artifact"].endswith("[summary len=4000]")
     assert "latest_output" not in downstream_summary[0]
