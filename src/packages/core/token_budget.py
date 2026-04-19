@@ -76,9 +76,24 @@ def _dependency_records(db: Session, task: TaskORM) -> list[dict[str, Any]]:
                 "latest_output": latest_run.output_snapshot if latest_run is not None else {},
                 "latest_output_keys": sorted((latest_run.output_snapshot or {}).keys()) if latest_run is not None else [],
                 "latest_run_status": latest_run.run_status if latest_run is not None else None,
+                "downstream_summary": {
+                    "task_id": dependency.id,
+                    "title": dependency.title,
+                    "status": dependency.status,
+                    "assigned_agent_role": dependency.assigned_agent_role,
+                    "latest_run_status": latest_run.run_status if latest_run is not None else None,
+                    "result_summary": build_result_summary(
+                        latest_run.output_snapshot if latest_run is not None else {},
+                        latest_run.error_message if latest_run is not None else None,
+                    ),
+                },
             }
         )
     return records
+
+
+def build_dependency_summaries(db: Session, task: TaskORM) -> list[dict[str, Any]]:
+    return [item["downstream_summary"] for item in _dependency_records(db, task)]
 
 
 def _dependency_summary_source(db: Session, task: TaskORM) -> str:
@@ -100,18 +115,10 @@ def _dependency_summary_source(db: Session, task: TaskORM) -> str:
 
 
 def _result_summary_source(db: Session, task: TaskORM) -> str:
-    records = _dependency_records(db, task)
-    if not records:
+    summaries = build_dependency_summaries(db, task)
+    if not summaries:
         return ""
-    summary = [
-        {
-            "task_id": item["task_id"],
-            "latest_output": item["latest_output"],
-        }
-        for item in records
-        if item["latest_output"]
-    ]
-    return _stable_json(summary)
+    return _stable_json(summaries)
 
 
 def _validation_rules_source(task: TaskORM, agent_role: AgentRoleORM) -> str:
@@ -161,6 +168,36 @@ def _build_summary(value: Any) -> Any:
             return value
         return f"{value[:SUMMARY_STRING_LIMIT]}...[summary len={len(value)}]"
     return value
+
+
+def summarize_value(value: Any) -> Any:
+    return _build_summary(value)
+
+
+def build_task_summary(task: TaskORM) -> dict[str, Any]:
+    return {
+        "task_id": task.id,
+        "title": task.title,
+        "task_type": task.task_type,
+        "status": task.status,
+        "priority": task.priority,
+        "description": _build_summary(task.description or ""),
+        "input_summary": _build_summary(task.input_payload or {}),
+        "expected_output_schema_summary": _build_summary(task.expected_output_schema or {}),
+        "dependency_count": len(task.dependency_ids or []),
+    }
+
+
+def build_result_summary(output_snapshot: dict[str, Any] | None, error_message: str | None = None) -> dict[str, Any]:
+    payload = output_snapshot or {}
+    return {
+        "status": "error" if error_message else ("success" if payload else "empty"),
+        "has_output": bool(payload),
+        "output_summary": _build_summary(payload),
+        "output_keys": sorted(payload.keys()),
+        "field_count": len(payload),
+        "error_summary": _build_summary(error_message) if error_message else None,
+    }
 
 
 def _trim_long_strings(value: Any) -> Any:
@@ -255,6 +292,9 @@ def _section_counts(
 def build_execution_budget(db: Session, task: TaskORM, agent_role: AgentRoleORM) -> dict[str, Any]:
     policy = _load_policy(agent_role)
     trimmed_payload = deepcopy(task.input_payload or {})
+    dependency_summaries = build_dependency_summaries(db, task)
+    if dependency_summaries:
+        trimmed_payload["dependency_summaries"] = dependency_summaries
     trim_steps: list[str] = []
     degradation_mode = "full_context"
     history_cap = policy.max_history_background_tokens
@@ -338,6 +378,8 @@ def build_execution_budget(db: Session, task: TaskORM, agent_role: AgentRoleORM)
 
     return {
         "trimmed_input_payload": trimmed_payload,
+        "task_summary": build_task_summary(task),
+        "dependency_summaries": dependency_summaries,
         "budget_report": {
             "model_context_limit": policy.model_context_limit,
             "system_prompt_tokens": current_counts["system_prompt_tokens"],

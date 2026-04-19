@@ -220,6 +220,7 @@ class TaskRead(TaskCreate):
     cancellation_reason: str | None = None
     created_at: datetime
     updated_at: datetime
+    task_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskEventRead(SchemaModel):
@@ -400,6 +401,7 @@ class ExecutionRunCreate(SchemaModel):
 
 class ExecutionRunRead(ExecutionRunCreate):
     id: str
+    result_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunDetailTaskRead(SchemaModel):
@@ -429,6 +431,8 @@ class RunRoutingSnapshotRead(SchemaModel):
     input_snapshot: dict[str, Any] = Field(default_factory=dict)
     expected_output_schema: dict[str, Any] = Field(default_factory=dict)
     dependency_ids: list[str] = Field(default_factory=list)
+    task_summary: dict[str, Any] = Field(default_factory=dict)
+    dependency_summaries: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class RunRetryHistoryItemRead(SchemaModel):
@@ -449,6 +453,7 @@ class RunDetailRead(SchemaModel):
     events: list[TaskEventRead] = Field(default_factory=list)
     cost_estimate: float = 0
     error_category: str | None = None
+    result_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunReplayRead(SchemaModel):

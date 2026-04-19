@@ -25,6 +25,7 @@ from src.packages.core.schemas import (
 from src.packages.core.timeline import load_task_timeline
 from src.apps.api.routers.task_batches import _derive_batch_status
 from src.packages.core.db.models import TaskBatchORM
+from src.packages.core.token_budget import build_result_summary
 
 router = APIRouter(tags=["runs"])
 
@@ -45,8 +46,15 @@ def _routing_snapshot_from_events(run: ExecutionRunORM, events: list[EventLogORM
             input_snapshot=payload.get("input_snapshot") or {},
             expected_output_schema=payload.get("expected_output_schema") or {},
             dependency_ids=payload.get("dependency_ids") or [],
+            task_summary=payload.get("task_summary") or {},
+            dependency_summaries=payload.get("dependency_summaries") or [],
         )
     return None
+
+
+def _execution_run_read(run: ExecutionRunORM) -> ExecutionRunRead:
+    payload = ExecutionRunRead.model_validate(run)
+    return payload.model_copy(update={"result_summary": build_result_summary(run.output_snapshot, run.error_message)})
 
 
 def _status_history_from_events(task_id: str, events: list[EventLogORM]) -> list[TaskStatusHistoryItemRead]:
@@ -69,7 +77,7 @@ def get_run(run_id: str, db: Session = Depends(get_db)) -> ExecutionRunRead:
     run = db.get(ExecutionRunORM, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution run not found")
-    return ExecutionRunRead.model_validate(run)
+    return _execution_run_read(run)
 
 
 @router.get("/runs/{run_id}/detail", response_model=RunDetailRead)
@@ -107,7 +115,7 @@ def get_run_detail(run_id: str, db: Session = Depends(get_db)) -> RunDetailRead:
     ).all()
 
     return RunDetailRead(
-        run=ExecutionRunRead.model_validate(run),
+        run=_execution_run_read(run),
         task=RunDetailTaskRead(
             task_id=task.id,
             title=task.title,
@@ -142,6 +150,7 @@ def get_run_detail(run_id: str, db: Session = Depends(get_db)) -> RunDetailRead:
             logs=run.logs,
             routing_reason=assignment.routing_reason if assignment is not None else None,
         ),
+        result_summary=build_result_summary(run.output_snapshot, run.error_message),
     )
 
 
@@ -156,7 +165,7 @@ def list_task_runs(task_id: str, db: Session = Depends(get_db)) -> list[Executio
         .where(ExecutionRunORM.task_id == task_id)
         .order_by(ExecutionRunORM.started_at.asc(), ExecutionRunORM.id.asc())
     ).all()
-    return [ExecutionRunRead.model_validate(run) for run in runs]
+    return [_execution_run_read(run) for run in runs]
 
 
 @router.get("/runs/{run_id}/replay", response_model=RunReplayRead)
@@ -180,7 +189,7 @@ def get_run_replay(run_id: str, db: Session = Depends(get_db)) -> RunReplayRead:
 
     routing_snapshot = _routing_snapshot_from_events(run, events)
     return RunReplayRead(
-        run=ExecutionRunRead.model_validate(run),
+        run=_execution_run_read(run),
         task=RunDetailTaskRead(
             task_id=task.id,
             title=task.title,
@@ -232,7 +241,7 @@ def get_batch_replay(batch_id: str, db: Session = Depends(get_db)) -> BatchRepla
                 task_type=task.task_type,
                 status=task.status,
                 routing_snapshot=routing_snapshot,
-                latest_run=ExecutionRunRead.model_validate(latest_run) if latest_run is not None else None,
+                latest_run=_execution_run_read(latest_run) if latest_run is not None else None,
                 timeline=timeline,
             )
         )

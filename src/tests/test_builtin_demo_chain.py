@@ -166,6 +166,7 @@ def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
         planner_run = next(item for item in run_details if item["output_snapshot"].get("stage") == "planner")
         worker_run = next(item for item in run_details if item["output_snapshot"].get("stage") == "worker")
         reviewer_run = next(item for item in run_details if item["output_snapshot"].get("stage") == "reviewer")
+        assert all(item["result_summary"]["status"] == "success" for item in run_details)
         assert planner_run["budget_report"]["budget_policy"]["template_name"] == "planner"
         assert planner_run["budget_report"]["global_background_tokens"] > planner_run["budget_report"]["dependency_summary_tokens"]
         assert worker_run["budget_report"]["budget_policy"]["template_name"] == "worker"
@@ -187,6 +188,7 @@ def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
             task_response = client.get(f"/tasks/{task_id}")
             assert task_response.status_code == 200
             assert task_response.json()["status"] == "success"
+            assert task_response.json()["task_summary"]["task_id"] == task_id
 
             events_response = client.get(f"/tasks/{task_id}/events")
             assert events_response.status_code == 200

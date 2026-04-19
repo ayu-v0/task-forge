@@ -207,6 +207,8 @@ def test_run_detail_endpoint_returns_routing_and_retry_history() -> None:
     assert payload["run"]["budget_report"]["overflow_risk"] is False
     assert payload["cost_estimate"] == 0.000011
     assert payload["error_category"] is None
+    assert payload["result_summary"]["status"] == "success"
+    assert payload["run"]["result_summary"] == payload["result_summary"]
     assert payload["events"][-1]["event_type"] == "run_completed"
 
 
@@ -242,6 +244,7 @@ def test_run_detail_endpoint_returns_error_category_for_failed_run() -> None:
     payload = detail_response.json()
     assert payload["run"]["run_status"] == "failed"
     assert payload["error_category"] == "timeout"
+    assert payload["result_summary"]["status"] == "error"
 
 
 def test_run_detail_endpoint_handles_cancelled_run_without_logs() -> None:
@@ -278,6 +281,7 @@ def test_run_detail_endpoint_handles_cancelled_run_without_logs() -> None:
     assert payload["run"]["cancel_reason"] == "user requested cancellation"
     assert payload["run"]["logs"] == []
     assert payload["error_category"] is None
+    assert payload["result_summary"]["status"] == "empty"
 
 
 def test_console_run_detail_page_is_accessible() -> None:
