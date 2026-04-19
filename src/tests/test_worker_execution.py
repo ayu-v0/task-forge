@@ -221,6 +221,17 @@ def test_worker_executes_queued_task_to_success() -> None:
     assert replay_snapshot["payload"]["task_summary"]["task_id"] == executed_task_id
     finished_event = next(event for event in events_response.json() if event["event_type"] == "execution_run_finished")
     assert finished_event["payload"]["result_summary"] == runs[0]["result_summary"]
+    assert finished_event["payload"]["artifact_type"] == "json"
+
+    batch_id = response.json()["batch_id"]
+    batch_summary = client.get(f"/task-batches/{batch_id}/summary")
+    assert batch_summary.status_code == 200
+    artifact = batch_summary.json()["artifacts"][0]
+    assert artifact["task_id"] == executed_task_id
+    assert artifact["run_id"] == runs[0]["id"]
+    assert artifact["summary"] == runs[0]["result_summary"]
+    assert artifact["structured_output"]["field_count"] >= 1
+    assert artifact["schema_version"] == "artifact.v1"
 
 
 def test_worker_failure_preserves_context() -> None:

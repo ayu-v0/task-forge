@@ -161,6 +161,14 @@ class BatchArtifactRead(SchemaModel):
     artifact_type: str
     uri: str
     content_type: str | None = None
+    raw_content: dict[str, Any] = Field(default_factory=dict)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    structured_output: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_json", "metadata"),
+    )
+    schema_version: str = "artifact.v1"
     created_at: datetime
 
 
@@ -564,7 +572,14 @@ class ArtifactCreate(SchemaModel):
     artifact_type: str
     uri: str
     content_type: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    raw_content: dict[str, Any] = Field(default_factory=dict)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    structured_output: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_json", "metadata"),
+    )
+    schema_version: str = "artifact.v1"
 
 
 class ArtifactRead(ArtifactCreate):

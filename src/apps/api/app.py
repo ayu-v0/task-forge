@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from src.apps.api.bootstrap import ensure_builtin_agent_roles
 from src.apps.api.routers import (
     agents_router,
+    artifacts_router,
     health_router,
     reviews_router,
     runs_router,
@@ -27,6 +28,7 @@ app.include_router(health_router)
 app.include_router(task_batches_router)
 app.include_router(tasks_router)
 app.include_router(agents_router)
+app.include_router(artifacts_router)
 app.include_router(runs_router)
 app.include_router(reviews_router)
 

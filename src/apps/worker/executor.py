@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from src.apps.worker.registry import AgentRegistry
 from src.apps.worker.types import WorkerContext
-from src.packages.core.db.models import AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, ReviewCheckpointORM, TaskORM
+from src.packages.core.artifacts import build_artifact_payload
+from src.packages.core.db.models import ArtifactORM, AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, ReviewCheckpointORM, TaskORM
 from src.packages.core.task_state_machine import transition_task_status
 from src.packages.core.token_budget import build_execution_budget, build_result_summary
 
@@ -355,6 +356,25 @@ def mark_run_success(
     run.output_snapshot = result
     run.latency_ms = latency_ms
     run.logs = [*run.logs, "execution finished"]
+    artifact_payload = build_artifact_payload(
+        task_id=task.id,
+        run_id=run.id,
+        output_snapshot=result,
+    )
+    artifact = ArtifactORM(
+        task_id=artifact_payload["task_id"],
+        run_id=artifact_payload["run_id"],
+        artifact_type=artifact_payload["artifact_type"],
+        uri=artifact_payload["uri"],
+        content_type=artifact_payload["content_type"],
+        raw_content=artifact_payload["raw_content"],
+        summary=artifact_payload["summary"],
+        structured_output=artifact_payload["structured_output"],
+        metadata_json=artifact_payload["metadata"],
+        schema_version=artifact_payload["schema_version"],
+    )
+    db.add(artifact)
+    db.flush()
 
     transition_task_status(
         db,
@@ -376,6 +396,9 @@ def mark_run_success(
                 "task_id": task.id,
                 "run_id": run.id,
                 "result_summary": build_result_summary(result),
+                "artifact_id": artifact.id,
+                "artifact_type": artifact.artifact_type,
+                "schema_version": artifact.schema_version,
             },
         )
     )

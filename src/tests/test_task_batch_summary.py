@@ -280,6 +280,11 @@ def test_summary_aggregates_latest_run_and_artifacts() -> None:
     assert task_summary["artifact_count"] == 1
     assert task_summary["error_category"] is None
     assert len(payload["artifacts"]) == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["raw_content"] == {}
+    assert artifact["summary"] == {}
+    assert artifact["structured_output"] == {}
+    assert artifact["schema_version"] == "artifact.v1"
 
 
 def test_summary_groups_failure_categories_from_latest_task_context() -> None:
