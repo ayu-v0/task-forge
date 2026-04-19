@@ -299,6 +299,7 @@ def test_get_run_returns_saved_execution_run() -> None:
     assert payload["task_id"] == executed_task_id
     assert payload["run_status"] == "success"
     assert payload["result_summary"]["status"] == "success"
+    assert payload["output_snapshot"]["status"] == "ok"
 
 
 def test_worker_does_not_run_task_with_unsatisfied_dependency() -> None:
