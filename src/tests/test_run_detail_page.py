@@ -141,6 +141,16 @@ def test_run_detail_endpoint_returns_routing_and_retry_history() -> None:
             logs=["compile started", "compile failed"],
             error_message="first failure",
             token_usage={"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+            budget_report={
+                "model_context_limit": 128000,
+                "system_prompt_tokens": 40,
+                "task_input_tokens": 10,
+                "dependency_summary_tokens": 0,
+                "estimated_input_tokens": 50,
+                "reserved_output_tokens": 256,
+                "safe_budget": 127694,
+                "overflow_risk": False,
+            },
             latency_ms=1000,
         )
         second_run = ExecutionRunORM(
@@ -153,6 +163,16 @@ def test_run_detail_endpoint_returns_routing_and_retry_history() -> None:
             output_snapshot={"artifact": "report"},
             logs=["compile started", "compile succeeded"],
             token_usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+            budget_report={
+                "model_context_limit": 128000,
+                "system_prompt_tokens": 41,
+                "task_input_tokens": 11,
+                "dependency_summary_tokens": 4,
+                "estimated_input_tokens": 56,
+                "reserved_output_tokens": 256,
+                "safe_budget": 127688,
+                "overflow_risk": False,
+            },
             latency_ms=900,
         )
         session.add(first_run)
@@ -183,6 +203,8 @@ def test_run_detail_endpoint_returns_routing_and_retry_history() -> None:
     assert [item["run_status"] for item in payload["retry_history"]] == ["success", "failed"]
     assert payload["retry_history"][0]["is_current"] is True
     assert payload["run"]["token_usage"]["total_tokens"] == 8
+    assert payload["run"]["budget_report"]["estimated_input_tokens"] == 56
+    assert payload["run"]["budget_report"]["overflow_risk"] is False
     assert payload["cost_estimate"] == 0.000011
     assert payload["error_category"] is None
     assert payload["events"][-1]["event_type"] == "run_completed"
@@ -275,6 +297,7 @@ def test_run_detail_page_assets_include_task_lifecycle_timeline() -> None:
     assert "/tasks/${detail.task.task_id}/timeline" in asset_response.text
     assert "Cost estimate" in asset_response.text
     assert "Error category" in asset_response.text
+    assert "Overflow risk" in asset_response.text
 
 
 def test_batch_detail_assets_link_to_run_detail_page() -> None:

@@ -150,6 +150,7 @@ class ExecutionRun(DomainModel):
     output_snapshot: dict[str, Any] = Field(default_factory=dict)
     error_message: str | None = None
     token_usage: dict[str, int] = Field(default_factory=dict)
+    budget_report: dict[str, Any] = Field(default_factory=dict)
     latency_ms: int | None = Field(default=None, ge=0)
 
 

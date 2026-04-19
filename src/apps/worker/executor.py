@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from traceback import format_exception
 
 from sqlalchemy import case, func, select
@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 
 from src.apps.worker.registry import AgentRegistry
 from src.apps.worker.types import WorkerContext
-from src.packages.core.db.models import AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, TaskORM
+from src.packages.core.db.models import AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, ReviewCheckpointORM, TaskORM
 from src.packages.core.task_state_machine import transition_task_status
+from src.packages.core.token_budget import build_execution_budget
 
 
 class TaskCancelledError(Exception):
@@ -40,6 +41,64 @@ def _dependencies_satisfied(task: TaskORM, db: Session) -> bool:
         .where(TaskORM.id.in_(task.dependency_ids), TaskORM.status == "success")
     )
     return satisfied_count == len(task.dependency_ids)
+
+
+def _review_deadline() -> datetime:
+    return _now().replace(microsecond=0) + timedelta(minutes=30)
+
+
+def _move_task_to_budget_review(
+    db: Session,
+    *,
+    task: TaskORM,
+    assignment: AssignmentORM,
+    agent_role: AgentRoleORM,
+    budget_report: dict,
+) -> None:
+    reason = (
+        f"context trimming exhausted for role={agent_role.role_name}; "
+        f"estimated_input_tokens={budget_report['estimated_input_tokens']} "
+        f"reserved_output_tokens={budget_report['reserved_output_tokens']}"
+    )
+    transition_task_status(
+        db,
+        task,
+        to_status="needs_review",
+        reason=reason,
+        source="worker",
+    )
+    review_checkpoint = ReviewCheckpointORM(
+        task_id=task.id,
+        reason=reason,
+        reason_category="manual_override",
+        timeout_policy="fail_closed",
+        review_status="pending",
+        deadline_at=_review_deadline(),
+    )
+    db.add(review_checkpoint)
+    db.flush()
+    db.add(
+        EventLogORM(
+            batch_id=task.batch_id,
+            task_id=task.id,
+            event_type="review_checkpoint_created",
+            event_status="needs_review",
+            message=reason,
+            payload={
+                "task_id": task.id,
+                "review_id": review_checkpoint.id,
+                "reason": reason,
+                "reason_category": review_checkpoint.reason_category,
+                "timeout_policy": review_checkpoint.timeout_policy,
+                "deadline_at": review_checkpoint.deadline_at.isoformat() if review_checkpoint.deadline_at else None,
+                "source": "worker",
+                "budget_report": budget_report,
+                "assignment_id": assignment.id,
+                "agent_role_id": agent_role.id,
+                "agent_role_name": agent_role.role_name,
+            },
+        )
+    )
 
 
 def unlock_dependent_tasks(db: Session, completed_task_id: str) -> list[str]:
@@ -158,18 +217,58 @@ def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM
         agent_role = db.get(AgentRoleORM, assignment.agent_role_id)
         if agent_role is None:
             return None
+        execution_budget = build_execution_budget(db, task, agent_role)
+        budget_report = execution_budget["budget_report"]
+        trimmed_input_payload = execution_budget["trimmed_input_payload"]
+        if budget_report["overflow_risk"]:
+            _move_task_to_budget_review(
+                db,
+                task=task,
+                assignment=assignment,
+                agent_role=agent_role,
+                budget_report=budget_report,
+            )
+            return None
+        task.input_payload = trimmed_input_payload
         run = ExecutionRunORM(
             task_id=task.id,
             agent_role_id=assignment.agent_role_id,
             run_status="running",
             started_at=_now(),
-            logs=["claimed by worker"],
-            input_snapshot=task.input_payload,
+            logs=[
+                "claimed by worker",
+                (
+                    "budget estimated: "
+                    f"input={budget_report['estimated_input_tokens']} "
+                    f"reserved_output={budget_report['reserved_output_tokens']} "
+                    f"overflow_risk={budget_report['overflow_risk']}"
+                ),
+            ],
+            input_snapshot=trimmed_input_payload,
             output_snapshot={},
             token_usage={},
+            budget_report=budget_report,
         )
         db.add(run)
         db.flush()
+        if budget_report["trim_applied"]:
+            db.add(
+                EventLogORM(
+                    batch_id=task.batch_id,
+                    task_id=task.id,
+                    run_id=run.id,
+                    event_type="context_trimmed",
+                    event_status="running",
+                    message="worker trimmed execution context to fit prompt budget",
+                    payload={
+                        "task_id": task.id,
+                        "run_id": run.id,
+                        "trim_steps": budget_report["trim_steps"],
+                        "degradation_mode": budget_report["degradation_mode"],
+                        "source": "worker",
+                    },
+                )
+            )
 
         transition_task_status(
             db,
@@ -195,9 +294,10 @@ def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM
                     "agent_role_name": agent_role.role_name,
                     "routing_reason": assignment.routing_reason,
                     "task_type": task.task_type,
-                    "input_snapshot": task.input_payload,
+                    "input_snapshot": trimmed_input_payload,
                     "expected_output_schema": task.expected_output_schema,
                     "dependency_ids": task.dependency_ids,
+                    "budget_report": budget_report,
                     "source": "worker",
                 },
             )

@@ -25,6 +25,39 @@ class SchemaModel(BaseModel):
     )
 
 
+class BudgetReportRead(SchemaModel):
+    model_context_limit: int = Field(ge=0, default=0)
+    system_prompt_tokens: int = Field(ge=0, default=0)
+    task_input_tokens: int = Field(ge=0, default=0)
+    dependency_summary_tokens: int = Field(ge=0, default=0)
+    global_background_tokens: int = Field(ge=0, default=0)
+    result_summary_tokens: int = Field(ge=0, default=0)
+    validation_rule_tokens: int = Field(ge=0, default=0)
+    history_background_tokens: int = Field(ge=0, default=0)
+    estimated_input_tokens: int = Field(ge=0, default=0)
+    initial_estimated_input_tokens: int = Field(ge=0, default=0)
+    reserved_output_tokens: int = Field(ge=0, default=0)
+    safe_budget: int = Field(ge=0, default=0)
+    overflow_risk: bool = False
+    initial_overflow_risk: bool = False
+    trim_applied: bool = False
+    trim_steps: list[str] = Field(default_factory=list)
+    degradation_mode: str = "full_context"
+    budget_policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class PromptBudgetPolicyRead(SchemaModel):
+    template_name: str = "default"
+    model_context_limit: int = Field(ge=1, default=128000)
+    max_global_background_tokens: int = Field(ge=0, default=256)
+    max_task_input_tokens: int = Field(ge=0, default=4096)
+    max_dependency_summary_tokens: int = Field(ge=0, default=1024)
+    max_result_summary_tokens: int = Field(ge=0, default=512)
+    max_validation_rule_tokens: int = Field(ge=0, default=512)
+    max_history_background_tokens: int = Field(ge=0, default=256)
+    reserved_output_tokens: int = Field(ge=1, default=256)
+
+
 class TaskBatchCreate(SchemaModel):
     title: str
     description: str | None = None
@@ -260,6 +293,7 @@ class AgentRoleRegisterRequest(SchemaModel):
     description: str | None = None
     capabilities: list[str] = Field(default_factory=list)
     capability_declaration: AgentCapabilityDeclaration = Field(default_factory=AgentCapabilityDeclaration)
+    prompt_budget_policy: PromptBudgetPolicyRead = Field(default_factory=PromptBudgetPolicyRead)
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     timeout_seconds: int = Field(gt=0, default=300)
@@ -272,6 +306,7 @@ class AgentRoleUpdateRequest(SchemaModel):
     description: str | None = None
     capabilities: list[str] | None = None
     capability_declaration: AgentCapabilityDeclaration | None = None
+    prompt_budget_policy: PromptBudgetPolicyRead | None = None
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     timeout_seconds: int | None = Field(default=None, gt=0)
@@ -286,6 +321,7 @@ class AgentRoleDetailRead(SchemaModel):
     description: str | None = None
     capabilities: list[str] = Field(default_factory=list)
     capability_declaration: AgentCapabilityDeclaration
+    prompt_budget_policy: PromptBudgetPolicyRead = Field(default_factory=PromptBudgetPolicyRead)
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     timeout_seconds: int
@@ -300,6 +336,7 @@ class AgentRegistryListItemRead(SchemaModel):
     description: str | None = None
     capabilities: list[str] = Field(default_factory=list)
     capability_declaration: AgentCapabilityDeclaration
+    prompt_budget_policy: PromptBudgetPolicyRead = Field(default_factory=PromptBudgetPolicyRead)
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     enabled: bool
@@ -357,6 +394,7 @@ class ExecutionRunCreate(SchemaModel):
     cancelled_at: datetime | None = None
     cancel_reason: str | None = None
     token_usage: dict[str, int] = Field(default_factory=dict)
+    budget_report: BudgetReportRead = Field(default_factory=BudgetReportRead)
     latency_ms: int | None = Field(default=None, ge=0)
 
 

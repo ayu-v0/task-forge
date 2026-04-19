@@ -111,6 +111,7 @@ class ExecutionRunORM(Base):
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_usage: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    budget_report: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     task: Mapped["TaskORM"] = relationship(back_populates="execution_runs")

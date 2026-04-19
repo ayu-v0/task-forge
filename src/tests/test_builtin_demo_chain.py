@@ -117,6 +117,14 @@ def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
         assert search_count == 1
         assert code_count == 1
 
+        planner_role = client.get("/agents").json()
+        planner_entry = next(item for item in planner_role if item["role_name"] == "planner_agent")
+        worker_entry = next(item for item in planner_role if item["role_name"] == "worker_agent")
+        reviewer_entry = next(item for item in planner_role if item["role_name"] == "reviewer_agent")
+        assert planner_entry["prompt_budget_policy"]["template_name"] == "planner"
+        assert worker_entry["prompt_budget_policy"]["template_name"] == "worker"
+        assert reviewer_entry["prompt_budget_policy"]["template_name"] == "reviewer"
+
         suffix = uuid.uuid4().hex[:8]
         create_response = client.post("/task-batches", json=_demo_payload(suffix))
         assert create_response.status_code == 201
@@ -148,6 +156,27 @@ def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
             if candidate["task_id"] == reviewer_task_id:
                 run_body = candidate
                 break
+
+        run_details = []
+        for summary in run_summaries:
+            run_response = client.get(f"/runs/{summary['run_id']}")
+            assert run_response.status_code == 200
+            run_details.append(run_response.json())
+
+        planner_run = next(item for item in run_details if item["output_snapshot"].get("stage") == "planner")
+        worker_run = next(item for item in run_details if item["output_snapshot"].get("stage") == "worker")
+        reviewer_run = next(item for item in run_details if item["output_snapshot"].get("stage") == "reviewer")
+        assert planner_run["budget_report"]["budget_policy"]["template_name"] == "planner"
+        assert planner_run["budget_report"]["global_background_tokens"] > planner_run["budget_report"]["dependency_summary_tokens"]
+        assert worker_run["budget_report"]["budget_policy"]["template_name"] == "worker"
+        assert (
+            worker_run["budget_report"]["budget_policy"]["max_task_input_tokens"]
+            > worker_run["budget_report"]["budget_policy"]["max_dependency_summary_tokens"]
+        )
+        assert worker_run["budget_report"]["task_input_tokens"] > 0
+        assert reviewer_run["budget_report"]["budget_policy"]["template_name"] == "reviewer"
+        assert reviewer_run["budget_report"]["result_summary_tokens"] > 0
+        assert reviewer_run["budget_report"]["validation_rule_tokens"] > reviewer_run["budget_report"]["history_background_tokens"]
 
         assert run_body["task_id"] == reviewer_task_id
         assert run_body["output_snapshot"]["stage"] == "reviewer"
