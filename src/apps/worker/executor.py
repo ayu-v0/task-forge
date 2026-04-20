@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from src.apps.worker.registry import AgentRegistry
 from src.apps.worker.types import WorkerContext
-from src.packages.core.artifact_store import create_run_artifact
-from src.packages.core.db.models import AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, ReviewCheckpointORM, TaskORM
+from src.packages.core.artifacts import build_artifact_payload
+from src.packages.core.db.models import ArtifactORM, AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, ReviewCheckpointORM, TaskORM
 from src.packages.core.task_state_machine import transition_task_status
 from src.packages.core.token_budget import build_execution_budget, build_result_summary
 
@@ -221,6 +221,8 @@ def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM
         execution_budget = build_execution_budget(db, task, agent_role)
         budget_report = execution_budget["budget_report"]
         trimmed_input_payload = execution_budget["trimmed_input_payload"]
+        task_summary = execution_budget["task_summary"]
+        dependency_summaries = execution_budget["dependency_summaries"]
         if budget_report["overflow_risk"]:
             _move_task_to_budget_review(
                 db,
@@ -298,6 +300,8 @@ def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM
                     "input_snapshot": trimmed_input_payload,
                     "expected_output_schema": task.expected_output_schema,
                     "dependency_ids": task.dependency_ids,
+                    "task_summary": task_summary,
+                    "dependency_summaries": dependency_summaries,
                     "budget_report": budget_report,
                     "source": "worker",
                 },
@@ -347,20 +351,30 @@ def mark_run_success(
     if task.cancellation_requested:
         return mark_run_cancelled(db, task_id, run_id, task.cancellation_reason or "task cancellation requested")
 
-    final_result = dict(result)
-    final_result.setdefault("result_summary", build_result_summary(final_result))
-
     run.run_status = "success"
     run.finished_at = _now()
-    run.output_snapshot = final_result
+    run.output_snapshot = result
     run.latency_ms = latency_ms
     run.logs = [*run.logs, "execution finished"]
-    create_run_artifact(
-        db,
+    artifact_payload = build_artifact_payload(
         task_id=task.id,
         run_id=run.id,
-        result=final_result,
+        output_snapshot=result,
     )
+    artifact = ArtifactORM(
+        task_id=artifact_payload["task_id"],
+        run_id=artifact_payload["run_id"],
+        artifact_type=artifact_payload["artifact_type"],
+        uri=artifact_payload["uri"],
+        content_type=artifact_payload["content_type"],
+        raw_content=artifact_payload["raw_content"],
+        summary=artifact_payload["summary"],
+        structured_output=artifact_payload["structured_output"],
+        metadata_json=artifact_payload["metadata"],
+        schema_version=artifact_payload["schema_version"],
+    )
+    db.add(artifact)
+    db.flush()
 
     transition_task_status(
         db,
@@ -378,7 +392,14 @@ def mark_run_success(
             event_type="execution_run_finished",
             event_status="success",
             message="worker completed execution run",
-            payload={"task_id": task.id, "run_id": run.id},
+            payload={
+                "task_id": task.id,
+                "run_id": run.id,
+                "result_summary": build_result_summary(result),
+                "artifact_id": artifact.id,
+                "artifact_type": artifact.artifact_type,
+                "schema_version": artifact.schema_version,
+            },
         )
     )
     unlocked_task_ids = unlock_dependent_tasks(db, task.id)
@@ -494,7 +515,12 @@ def mark_run_failed(
             event_type="execution_run_finished",
             event_status="failed",
             message="worker execution failed",
-            payload={"task_id": task.id, "run_id": run.id, "error_message": str(exc)},
+            payload={
+                "task_id": task.id,
+                "run_id": run.id,
+                "error_message": str(exc),
+                "result_summary": build_result_summary({}, str(exc)),
+            },
         )
     )
     db.flush()

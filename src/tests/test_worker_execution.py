@@ -197,6 +197,7 @@ def test_worker_executes_queued_task_to_success() -> None:
     task_response = client.get(f"/tasks/{executed_task_id}")
     assert task_response.status_code == 200
     assert task_response.json()["status"] == "success"
+    assert task_response.json()["task_summary"]["task_id"] == executed_task_id
 
     runs_response = client.get(f"/tasks/{executed_task_id}/runs")
     assert runs_response.status_code == 200
@@ -211,6 +212,8 @@ def test_worker_executes_queued_task_to_success() -> None:
     assert runs[0]["budget_report"]["overflow_risk"] is False
     assert runs[0]["budget_report"]["initial_overflow_risk"] is False
     assert runs[0]["budget_report"]["budget_policy"]["template_name"] == "default"
+    assert runs[0]["result_summary"]["status"] == "success"
+    assert runs[0]["result_summary"]["output_summary"]["status"] == "ok"
 
     events_response = client.get(f"/tasks/{executed_task_id}/events")
     assert events_response.status_code == 200
@@ -224,6 +227,20 @@ def test_worker_executes_queued_task_to_success() -> None:
         event for event in events_response.json() if event["event_type"] == "execution_run_replay_snapshot"
     )
     assert replay_snapshot["payload"]["budget_report"] == runs[0]["budget_report"]
+    assert replay_snapshot["payload"]["task_summary"]["task_id"] == executed_task_id
+    finished_event = next(event for event in events_response.json() if event["event_type"] == "execution_run_finished")
+    assert finished_event["payload"]["result_summary"] == runs[0]["result_summary"]
+    assert finished_event["payload"]["artifact_type"] == "json"
+
+    batch_id = response.json()["batch_id"]
+    batch_summary = client.get(f"/task-batches/{batch_id}/summary")
+    assert batch_summary.status_code == 200
+    artifact = batch_summary.json()["artifacts"][0]
+    assert artifact["task_id"] == executed_task_id
+    assert artifact["run_id"] == runs[0]["id"]
+    assert artifact["summary"] == runs[0]["result_summary"]
+    assert artifact["structured_output"]["field_count"] >= 1
+    assert artifact["schema_version"] == "artifact.v1"
 
 
 def test_worker_failure_preserves_context() -> None:
@@ -261,6 +278,7 @@ def test_worker_failure_preserves_context() -> None:
     assert runs[0]["input_snapshot"]["task_summary"]["structured_result"]["kind"] == "object"
     assert "intentional failure" in runs[0]["error_message"]
     assert any("execution failed" in line for line in runs[0]["logs"])
+    assert runs[0]["result_summary"]["status"] == "error"
 
 
 def test_worker_injects_task_summary_into_execution_input() -> None:
@@ -379,6 +397,8 @@ def test_get_run_returns_saved_execution_run() -> None:
     assert payload["id"] == run_id
     assert payload["task_id"] == executed_task_id
     assert payload["run_status"] == "success"
+    assert payload["result_summary"]["status"] == "success"
+    assert payload["output_snapshot"]["status"] == "ok"
 
 
 def test_worker_does_not_run_task_with_unsatisfied_dependency() -> None:
@@ -677,6 +697,8 @@ def test_worker_trims_context_before_execution_when_budget_overflows() -> None:
     assert run_payload["budget_report"]["degradation_mode"] in {"compressed_input", "summary_only", "trimmed_dependencies"}
     assert run_payload["input_snapshot"] != payload["tasks"][1]["input_payload"]
     assert any("budget estimated" in line for line in run_payload["logs"])
+    assert "dependency_summaries" in run_payload["input_snapshot"]
+    assert run_payload["input_snapshot"]["dependency_summaries"][0]["result_summary"]["status"] == "success"
 
     events = client.get(f"/tasks/{dependent_task_id}/events").json()
     assert "context_trimmed" in [event["event_type"] for event in events]

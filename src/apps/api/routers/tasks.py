@@ -17,6 +17,7 @@ from src.packages.core.schemas import (
 )
 from src.packages.core.timeline import load_task_timeline
 from src.packages.core.task_state_machine import TaskStatusTransitionError, transition_task_status
+from src.packages.core.token_budget import build_task_summary
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -30,7 +31,8 @@ def get_task(task_id: str, db: Session = Depends(get_db)) -> TaskRead:
     task = db.get(TaskORM, task_id)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
-    return TaskRead.model_validate(task)
+    payload = TaskRead.model_validate(task)
+    return payload.model_copy(update={"task_summary": build_task_summary(task)})
 
 
 @router.get("/{task_id}/events", response_model=list[TaskEventRead])

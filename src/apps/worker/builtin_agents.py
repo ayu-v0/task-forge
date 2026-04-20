@@ -11,27 +11,6 @@ class WorkerAgent(Protocol):
         ...
 
 
-def _build_output(
-    *,
-    status: str,
-    summary: str,
-    result: dict[str, Any],
-    warnings: list[str] | None = None,
-    next_action_hint: str | None = None,
-    extras: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    payload = {
-        "status": status,
-        "summary": summary,
-        "result": result,
-        "warnings": warnings or [],
-        "next_action_hint": next_action_hint,
-    }
-    if extras:
-        payload.update(extras)
-    return payload
-
-
 def _serialize_context(context: Any) -> dict[str, Any]:
     if isinstance(context, dict):
         return context
@@ -49,21 +28,61 @@ def _serialize_context(context: Any) -> dict[str, Any]:
     return {"value": str(context)}
 
 
+def _structured_output(
+    *,
+    status: str,
+    summary: str,
+    result: dict[str, Any],
+    warnings: list[str] | None = None,
+    next_action_hint: str | None = None,
+    **legacy_fields: Any,
+) -> dict[str, Any]:
+    payload = {
+        "status": status,
+        "summary": summary,
+        "result": result,
+        "warnings": warnings or [],
+        "next_action_hint": next_action_hint,
+    }
+    payload.update(legacy_fields)
+    return payload
+
+
+def _review_target(raw_output: Any) -> Any:
+    if isinstance(raw_output, dict) and {
+        "status",
+        "summary",
+        "result",
+        "warnings",
+        "next_action_hint",
+    }.issubset(raw_output):
+        return raw_output.get("result")
+    return raw_output
+
+
 class EchoWorkerAgent:
     def run(self, task: TaskORM, context: dict[str, Any]) -> dict[str, Any]:
         result = {
+            "stage": "echo",
             "task_id": task.id,
             "task_type": task.task_type,
             "echo": task.input_payload,
             "context": _serialize_context(context),
         }
-        return _build_output(
-            status="ok",
-            summary=f"echoed task_type={task.task_type}",
-            result=result,
-            next_action_hint="inspect echoed payload",
-            extras=result,
-        )
+        summary = f"echoed task_type={task.task_type}"
+        return {
+            **_structured_output(
+                status="ok",
+                summary=summary,
+                result=result,
+                warnings=[],
+                next_action_hint="Inspect echoed payload for downstream debugging or smoke tests.",
+            ),
+            "task_id": task.id,
+            "task_type": task.task_type,
+            "echo": task.input_payload,
+            "context": result["context"],
+        }
 
 
 class FailingWorkerAgent:
@@ -77,17 +96,25 @@ class PlannerWorkerAgent:
         tags = [task.task_type, "demo", "planned"]
         steps = [step for step in text.split(" ") if step]
         result = {
+            "stage": "planner",
+            "task_id": task.id,
             "normalized_text": text,
             "tags": tags,
             "steps": steps,
             "context": _serialize_context(context),
         }
-        return _build_output(
+        return _structured_output(
             status="ok",
             summary=f"planned {len(steps)} step(s) for task_type={task.task_type}",
             result=result,
-            next_action_hint="execute planned steps",
-            extras={"stage": "planner", "task_id": task.id, **result},
+            warnings=[],
+            next_action_hint="Use the normalized text and steps as the worker input baseline.",
+            stage="planner",
+            task_id=task.id,
+            normalized_text=text,
+            tags=tags,
+            steps=steps,
+            context=result["context"],
         )
 
 
@@ -101,16 +128,23 @@ class SearchWorkerAgent:
             "intent": "research",
         }
         result = {
+            "stage": "search",
+            "task_id": task.id,
             "query": query,
             "search_plan": search_plan,
             "context": _serialize_context(context),
         }
-        return _build_output(
+        return _structured_output(
             status="ok",
-            summary=f"prepared research plan for query={query or task.task_type}",
+            summary=f"prepared research plan with {len(keywords)} keyword(s)",
             result=result,
-            next_action_hint="run search against listed sources",
-            extras={"stage": "search", "task_id": task.id, **result},
+            warnings=[],
+            next_action_hint="Execute the listed sources before drafting the final response.",
+            stage="search",
+            task_id=task.id,
+            query=query,
+            search_plan=search_plan,
+            context=result["context"],
         )
 
 
@@ -129,68 +163,79 @@ class CodeWorkerAgent:
             ],
         }
         result = {
+            "stage": "code",
+            "task_id": task.id,
             "code_plan": code_plan,
             "context": _serialize_context(context),
         }
-        return _build_output(
+        return _structured_output(
             status="ok",
-            summary=summary,
+            summary=f"prepared {language} implementation plan",
             result=result,
-            next_action_hint="implement the code plan",
-            extras={"stage": "code", "task_id": task.id, **result},
+            warnings=[],
+            next_action_hint="Implement the change and verify with targeted tests.",
+            stage="code",
+            task_id=task.id,
+            code_plan=code_plan,
+            context=result["context"],
         )
 
 
 class DefaultWorkerAgent:
     def run(self, task: TaskORM, context: dict[str, Any]) -> dict[str, Any]:
         worker_result = {
-            "task_type": task.task_type,
-            "input": task.input_payload,
+            "stage": "worker",
+            "task_id": task.id,
+            "payload": {
+                "summary": f"processed task_type={task.task_type}",
+                "input": task.input_payload,
+            },
             "context": _serialize_context(context),
         }
-        return _build_output(
+        return _structured_output(
             status="ok",
             summary=f"processed task_type={task.task_type}",
             result=worker_result,
-            next_action_hint="review processed output",
-            extras={"stage": "worker", "task_id": task.id, "context": _serialize_context(context)},
+            warnings=[],
+            next_action_hint="Pass the worker payload to reviewer or downstream aggregation.",
+            stage="worker",
+            task_id=task.id,
+            context=worker_result["context"],
         )
 
 
 class ReviewerWorkerAgent:
     def run(self, task: TaskORM, context: dict[str, Any]) -> dict[str, Any]:
         raw = task.input_payload.get("raw_output")
-        structured_output = task.input_payload.get("structured_output")
-        if not structured_output:
-            downstream = task.input_payload.get("downstream_summary") or []
-            if isinstance(downstream, list):
-                for item in downstream:
-                    if isinstance(item, dict) and item.get("structured_output"):
-                        structured_output = item["structured_output"]
-                        break
-        candidate_output = raw if raw is not None else structured_output
-        validation_passed = bool(candidate_output) or bool(task.input_payload.get("allow_empty"))
+        review_target = _review_target(raw)
+        validation_passed = bool(review_target) or bool(task.input_payload.get("allow_empty"))
         needs_manual_review = bool(task.input_payload.get("force_manual_review")) or not validation_passed
-        notes = "manual review required due to failed validation" if needs_manual_review else "auto review passed"
+        notes = (
+            "manual review required due to failed validation"
+            if needs_manual_review
+            else "auto review passed"
+        )
         result = {
+            "stage": "reviewer",
+            "task_id": task.id,
             "validation_passed": validation_passed,
             "needs_manual_review": needs_manual_review,
             "notes": notes,
-            "reviewed_output": candidate_output,
+            "review_target": review_target,
             "context": _serialize_context(context),
         }
-        return _build_output(
-            status="ok",
+        return _structured_output(
+            status="needs_review" if needs_manual_review else "ok",
             summary=notes,
             result=result,
-            warnings=[] if validation_passed else ["validation failed or empty output"],
-            next_action_hint="manual review required" if needs_manual_review else "proceed to next task",
-            extras={
-                "stage": "reviewer",
-                "task_id": task.id,
-                "validation_passed": validation_passed,
-                "needs_manual_review": needs_manual_review,
-                "notes": notes,
-                "context": _serialize_context(context),
-            },
+            warnings=[notes] if needs_manual_review else [],
+            next_action_hint="Manual review is required before accepting this result."
+            if needs_manual_review
+            else "Promote the reviewed result to downstream consumers.",
+            stage="reviewer",
+            task_id=task.id,
+            validation_passed=validation_passed,
+            needs_manual_review=needs_manual_review,
+            notes=notes,
+            context=result["context"],
         )

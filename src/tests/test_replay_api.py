@@ -189,14 +189,15 @@ def test_run_replay_returns_input_output_logs_status_history_and_routing_snapsho
     payload = replay_response.json()
     assert payload["replay_ready"] is True
     assert payload["run"]["id"] == run_id
-    assert payload["run"]["output_snapshot"]["artifact"] == "report"
-    assert payload["run"]["output_snapshot"]["result_summary"]["structured_result"]["kind"] == "object"
+    assert payload["run"]["output_snapshot"] == {"artifact": "report"}
+    assert payload["run"]["result_summary"]["status"] == "success"
     assert payload["run"]["budget_report"]["estimated_input_tokens"] > 0
     assert payload["routing_snapshot"]["run_id"] == run_id
     assert payload["routing_snapshot"]["task_id"] == task_id
     assert payload["routing_snapshot"]["routing_reason"] is not None
-    assert payload["routing_snapshot"]["input_snapshot"]["text"] == "hello"
-    assert payload["routing_snapshot"]["input_snapshot"]["task_summary"]["structured_result"]["kind"] == "object"
+    assert payload["routing_snapshot"]["input_snapshot"] == {"text": "hello"}
+    assert payload["routing_snapshot"]["task_summary"]["task_id"] == task_id
+    assert payload["routing_snapshot"]["dependency_summaries"] == []
     assert payload["timeline"]["task_id"] == task_id
     assert any(item["new_status"] == "running" for item in payload["status_history"])
     snapshot_event = next(event for event in payload["events"] if event["event_type"] == "execution_run_replay_snapshot")
@@ -321,7 +322,7 @@ def test_run_replay_shows_trimmed_input_snapshot_when_context_was_reduced() -> N
     assert replay["run"]["input_snapshot"] != {"text": "x" * 600000}
 
 
-def test_run_replay_shows_downstream_summary_instead_of_full_dependency_output() -> None:
+def test_run_replay_includes_dependency_summaries_for_downstream_consumption() -> None:
     suffix = uuid.uuid4().hex[:8]
     _register_agent(client, role_name=f"{TEST_PREFIX}worker-{suffix}", supported_task_types=["generate"])
     response = client.post("/task-batches", json=_batch_payload("generate", suffix))
@@ -332,23 +333,22 @@ def test_run_replay_shows_downstream_summary_instead_of_full_dependency_output()
     with Session(engine) as session:
         first_claim = claim_next_task(session)
         assert first_claim is not None
-        upstream_task, upstream_run, _agent_role = first_claim
-        mark_run_success(session, upstream_task.id, upstream_run.id, {"artifact": "x" * 4000}, 100)
+        first_task, first_run, _agent_role = first_claim
+        mark_run_success(session, first_task.id, first_run.id, {"artifact": "report", "body": "x" * 2000}, 111)
         session.commit()
 
     with Session(engine) as session:
         second_claim = claim_next_task(session)
         assert second_claim is not None
-        task, run, _agent_role = second_claim
-        assert task.id == dependent_task_id
+        second_task, second_run, _agent_role = second_claim
+        assert second_task.id == dependent_task_id
         session.commit()
-        run_id = run.id
+        run_id = second_run.id
 
     replay_response = client.get(f"/runs/{run_id}/replay")
     assert replay_response.status_code == 200
-    replay = replay_response.json()
-    downstream_summary = replay["routing_snapshot"]["input_snapshot"]["downstream_summary"]
-    assert len(downstream_summary) == 1
-    assert downstream_summary[0]["result_summary"]["summary"]["artifact"].endswith("[summary len=4000]")
-    assert downstream_summary[0]["structured_output"]["artifact"].endswith("[summary len=4000]")
-    assert "latest_output" not in downstream_summary[0]
+    payload = replay_response.json()
+    assert payload["routing_snapshot"]["dependency_summaries"][0]["task_id"] != ""
+    assert payload["routing_snapshot"]["dependency_summaries"][0]["result_summary"]["status"] == "success"
+    assert "summary len=2000" in payload["routing_snapshot"]["dependency_summaries"][0]["result_summary"]["output_summary"]["body"]
+    assert payload["routing_snapshot"]["input_snapshot"]["dependency_summaries"] == payload["routing_snapshot"]["dependency_summaries"]
