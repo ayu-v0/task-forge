@@ -140,3 +140,67 @@ def test_http_model_agent_returns_none_when_disabled(monkeypatch) -> None:
         assert payload is None
     finally:
         config_path.unlink(missing_ok=True)
+
+
+def test_http_model_agent_parse_error_includes_raw_response_preview(monkeypatch) -> None:
+    config_path = _make_config_path()
+    try:
+        config_path.write_text(
+            json.dumps(
+                {
+                    "enabled": True,
+                    "request": {
+                        "format": "openai_chat_completions",
+                        "url": "https://example.test/v1/chat/completions",
+                        "timeout_seconds": 30,
+                    },
+                    "defaults": {
+                        "model": "test-model",
+                        "temperature": 0.1,
+                        "max_tokens": 512,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("TASK_FORGE_MODEL_CONFIG", str(config_path))
+
+        task = TaskORM(
+            id="task-3",
+            title="Bad JSON task",
+            task_type="research_topic",
+            input_payload={"query": "bad json"},
+            expected_output_schema={"type": "object"},
+        )
+        context = WorkerContext(
+            run_id="run-3",
+            task_id="task-3",
+            agent_role_name="search_agent",
+            started_at=datetime.now(timezone.utc),
+            cancellation_check=lambda: False,
+        )
+
+        response = Mock()
+        response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"status": "ok", "summary": "broken" "result": {}}'
+                    }
+                }
+            ]
+        }
+        response.raise_for_status.return_value = None
+
+        with patch("src.apps.worker.http_model_agent.httpx.post", return_value=response):
+            try:
+                run_model_agent_if_enabled("search_agent", task, context)
+            except ValueError as exc:
+                message = str(exc)
+            else:
+                raise AssertionError("Expected ValueError for broken JSON")
+
+        assert "raw_response_preview=" in message
+        assert "broken" in message
+    finally:
+        config_path.unlink(missing_ok=True)

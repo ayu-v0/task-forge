@@ -88,7 +88,7 @@ class TaskBatchTaskCreate(SchemaModel):
 
 
 class TaskBatchSubmitRequest(TaskBatchCreate):
-    tasks: list[TaskBatchTaskCreate] = Field(min_length=3, max_length=20)
+    tasks: list[TaskBatchTaskCreate] = Field(min_length=1, max_length=20)
 
 
 class TaskBatchSubmitTaskRead(SchemaModel):

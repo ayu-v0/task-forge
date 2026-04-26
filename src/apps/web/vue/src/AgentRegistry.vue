@@ -2,10 +2,14 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 const taskType = ref("");
+const taskSubmitText = ref("");
+const submitMessage = ref("");
+const submittedBatchId = ref("");
 const statusText = ref("Loading agent registry...");
 const agents = ref([]);
 const diagnosis = ref(null);
 const loading = ref(false);
+const submitting = ref(false);
 const errorMessage = ref("");
 const isDrawerOpen = ref(false);
 const roleSearch = ref("");
@@ -69,6 +73,68 @@ function closeDrawer() {
 function handleKeydown(event) {
   if (event.key === "Escape" && isDrawerOpen.value) {
     closeDrawer();
+  }
+}
+
+function buildTaskSubmitPayload(rawText, normalizedTaskType) {
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  const taskTexts = lines.length ? [...lines] : [rawText.trim()];
+
+  return {
+    title: `Agent registry submission ${new Date().toLocaleString()}`,
+    description: "Submitted from the agent registry console.",
+    created_by: "agent-registry-console",
+    metadata: { source: "agent-registry" },
+    tasks: taskTexts.slice(0, 20).map((text, index) => ({
+      client_task_id: `registry_task_${index + 1}`,
+      title: `Submitted task ${index + 1}`,
+      description: text,
+      task_type: normalizedTaskType,
+      priority: "medium",
+      input_payload: { text },
+      expected_output_schema: { type: "object" },
+      dependency_client_task_ids: [],
+    })),
+  };
+}
+
+async function submitTaskBatch() {
+  const rawText = taskSubmitText.value.trim();
+  if (!rawText) {
+    submitMessage.value = "Enter task text before submitting.";
+    submittedBatchId.value = "";
+    return;
+  }
+
+  const normalizedTaskType = taskType.value.trim() || "planner_preprocess";
+  submitting.value = true;
+  submitMessage.value = "Submitting task batch...";
+  submittedBatchId.value = "";
+  errorMessage.value = "";
+
+  try {
+    const response = await fetch("/task-batches", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildTaskSubmitPayload(rawText, normalizedTaskType)),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.detail || `Submit failed with status ${response.status}`);
+    }
+    const payload = await response.json();
+    submittedBatchId.value = payload.batch_id;
+    submitMessage.value = `Submitted ${payload.normalized_task_count} task(s) as a new batch.`;
+    taskType.value = normalizedTaskType;
+    await loadRegistry();
+  } catch (error) {
+    submitMessage.value = error.message || "Unable to submit task batch.";
+  } finally {
+    submitting.value = false;
   }
 }
 
@@ -137,13 +203,33 @@ onBeforeUnmount(() => {
       <!-- Legacy test markers retained for the pre-upgrade test suite: Agent角色管理 / 角色列表 -->
     </section>
 
+    <section class="task-submit-panel" aria-label="Task submission">
+      <label class="field task-submit-field">
+        <span>Task submission text</span>
+        <textarea
+          v-model="taskSubmitText"
+          rows="4"
+          placeholder="Describe the task to submit. Use one line per task when submitting multiple tasks."
+        ></textarea>
+      </label>
+      <div class="task-submit-actions">
+        <button class="primary-button submit-button" type="button" :disabled="submitting || loading" @click="submitTaskBatch">
+          {{ submitting ? "Submitting" : "Submit Task" }}
+        </button>
+        <p v-if="submitMessage" class="submit-message">
+          {{ submitMessage }}
+          <a v-if="submittedBatchId" :href="`/console/batches/${submittedBatchId}`">Open batch</a>
+        </p>
+      </div>
+    </section>
+
     <section class="command-bar" aria-label="Registry controls">
       <label class="field">
         <span>Task type diagnosis</span>
         <input
           v-model="taskType"
           type="search"
-          placeholder="generate"
+          placeholder="planner_preprocess"
           @keydown.enter="loadRegistry"
         >
       </label>
@@ -319,7 +405,8 @@ onBeforeUnmount(() => {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -354,6 +441,7 @@ button:disabled {
 }
 
 .hero-panel,
+.task-submit-panel,
 .command-bar,
 .panel,
 .quiet-panel,
@@ -549,6 +637,68 @@ h3 {
   border-color: rgba(167, 139, 250, 0.62);
   box-shadow: 0 0 32px rgba(139, 92, 246, 0.18);
   transform: translateY(-1px);
+}
+
+.task-submit-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+  margin-top: 18px;
+  padding: 14px;
+  border-radius: 22px;
+}
+
+.task-submit-field textarea {
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  outline: none;
+  background: rgba(0, 0, 0, 0.35);
+  color: #f8fafc;
+  padding: 13px 14px;
+  text-transform: none;
+  line-height: 1.5;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.task-submit-field textarea::placeholder {
+  color: #64748b;
+}
+
+.task-submit-field textarea:focus {
+  border-color: rgba(139, 92, 246, 0.72);
+  background: rgba(0, 0, 0, 0.48);
+  box-shadow:
+    0 0 0 3px rgba(139, 92, 246, 0.16),
+    0 0 24px rgba(139, 92, 246, 0.18);
+}
+
+.task-submit-actions {
+  display: grid;
+  gap: 10px;
+  min-width: 180px;
+}
+
+.submit-button {
+  width: 100%;
+  min-height: 48px;
+}
+
+.submit-message {
+  max-width: 240px;
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.submit-message a {
+  color: #c4b5fd;
+  font-weight: 800;
+  text-decoration: none;
 }
 
 .command-bar {
@@ -936,6 +1086,7 @@ dd {
   }
 
   .command-bar,
+  .task-submit-panel,
   .drawer-tools,
   .role-metrics {
     grid-template-columns: 1fr;

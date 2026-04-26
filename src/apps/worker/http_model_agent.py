@@ -52,6 +52,14 @@ ROLE_SYSTEM_PROMPTS = {
 }
 
 REQUIRED_FIELDS = ("status", "summary", "result", "warnings", "next_action_hint")
+RAW_RESPONSE_PREVIEW_CHARS = 800
+
+
+def _preview_text(value: str, limit: int = RAW_RESPONSE_PREVIEW_CHARS) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[:limit]}..."
 
 
 def _serialize_context(context: WorkerContext) -> dict[str, Any]:
@@ -210,8 +218,14 @@ def _call_openai_compatible_model(
 
     message = choices[0].get("message") or {}
     content_text = _extract_message_text(message.get("content"))
-    json_text = _extract_json_block(content_text)
-    structured_payload = json.loads(json_text)
+    try:
+        json_text = _extract_json_block(content_text)
+        structured_payload = json.loads(json_text)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "Model response could not be parsed as JSON: "
+            f"{exc}; raw_response_preview={_preview_text(content_text)}"
+        ) from exc
 
     usage = payload.get("usage") or {}
     token_usage = {
