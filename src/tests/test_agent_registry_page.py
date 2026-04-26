@@ -347,6 +347,13 @@ def test_console_agent_registry_page_is_accessible() -> None:
     assert "/console/vue/" in response.text
 
 
+def test_root_route_serves_agent_registry_home_page() -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Agent Registry" in response.text
+    assert "/console/vue/" in response.text
+
+
 def test_agent_registry_vue_source_includes_required_drawer_interactions() -> None:
     component_path = ROOT / "src" / "apps" / "web" / "vue" / "src" / "AgentRegistry.vue"
     component_source = component_path.read_text(encoding="utf-8")

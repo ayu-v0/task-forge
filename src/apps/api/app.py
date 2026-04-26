@@ -39,6 +39,18 @@ if VUE_DIST_DIR.exists():
     app.mount("/console/vue", StaticFiles(directory=VUE_DIST_DIR), name="console-vue")
 
 
+def _agent_registry_page() -> FileResponse:
+    vue_entry = VUE_DIST_DIR / "index.html"
+    if vue_entry.exists():
+        return FileResponse(vue_entry)
+    return FileResponse(WEB_DIR / "agents.html")
+
+
+@app.get("/")
+def console_home() -> FileResponse:
+    return _agent_registry_page()
+
+
 @app.get("/console/batches")
 def console_batches() -> FileResponse:
     return FileResponse(WEB_DIR / "index.html")
@@ -46,10 +58,7 @@ def console_batches() -> FileResponse:
 
 @app.get("/console/agents")
 def console_agents() -> FileResponse:
-    vue_entry = VUE_DIST_DIR / "index.html"
-    if vue_entry.exists():
-        return FileResponse(vue_entry)
-    return FileResponse(WEB_DIR / "agents.html")
+    return _agent_registry_page()
 
 
 @app.get("/console/batches/{batch_id}")
