@@ -339,6 +339,7 @@ def mark_run_success(
     run_id: str,
     result: dict,
     latency_ms: int,
+    token_usage: dict | None = None,
 ) -> ExecutionRunORM:
     if not db.in_transaction():
         with db.begin():
@@ -355,6 +356,8 @@ def mark_run_success(
     run.finished_at = _now()
     run.output_snapshot = result
     run.latency_ms = latency_ms
+    if token_usage is not None:
+        run.token_usage = token_usage
     run.logs = [*run.logs, "execution finished"]
     artifact_payload = build_artifact_payload(
         task_id=task.id,
@@ -564,12 +567,22 @@ def execute_task(
             cancellation_check=lambda: is_task_cancellation_requested(db, task.id),
         )
         result = _execute_agent(agent, task, context)
+        execution_meta = {}
+        if isinstance(result, dict):
+            execution_meta = result.pop("_execution_meta", {}) or {}
         if is_task_cancellation_requested(db, task.id):
             raise TaskCancelledError("task cancellation requested during execution")
         latency_ms = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000))
         if db.in_transaction():
             db.rollback()
-        return mark_run_success(db, task.id, run.id, result, latency_ms)
+        return mark_run_success(
+            db,
+            task.id,
+            run.id,
+            result,
+            latency_ms,
+            token_usage=execution_meta.get("token_usage"),
+        )
     except TaskCancelledError as exc:
         if db.in_transaction():
             db.rollback()
