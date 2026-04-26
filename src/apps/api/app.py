@@ -33,7 +33,10 @@ app.include_router(runs_router)
 app.include_router(reviews_router)
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+VUE_DIST_DIR = WEB_DIR / "dist"
 app.mount("/console/assets", StaticFiles(directory=WEB_DIR), name="console-assets")
+if VUE_DIST_DIR.exists():
+    app.mount("/console/vue", StaticFiles(directory=VUE_DIST_DIR), name="console-vue")
 
 
 @app.get("/console/batches")
@@ -43,6 +46,9 @@ def console_batches() -> FileResponse:
 
 @app.get("/console/agents")
 def console_agents() -> FileResponse:
+    vue_entry = VUE_DIST_DIR / "index.html"
+    if vue_entry.exists():
+        return FileResponse(vue_entry)
     return FileResponse(WEB_DIR / "agents.html")
 
 
