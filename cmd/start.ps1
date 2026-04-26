@@ -59,16 +59,22 @@ function Start-BackgroundProcess {
         [string]$PidPath
     )
 
-    $escapedRoot = $ProjectRoot.ToString().Replace('"', '\"')
-    $escapedFilePath = $FilePath.Replace('"', '\"')
-    $escapedArguments = ($Arguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }) -join " "
-    $escapedStdOutPath = $StdOutPath.Replace('"', '\"')
-    $escapedStdErrPath = $StdErrPath.Replace('"', '\"')
-    $command = "cd /d `"$escapedRoot`" && `"$escapedFilePath`" $escapedArguments > `"$escapedStdOutPath`" 2> `"$escapedStdErrPath`""
+    $launcherPath = Join-Path $RunDir "$($Name.ToLowerInvariant().Replace(' ', '-')).cmd"
+    $escapedRoot = $ProjectRoot.ToString().Replace('"', '""')
+    $escapedFilePath = $FilePath.Replace('"', '""')
+    $escapedArguments = ($Arguments | ForEach-Object { '"' + $_.Replace('"', '""') + '"' }) -join " "
+    $escapedStdOutPath = $StdOutPath.Replace('"', '""')
+    $escapedStdErrPath = $StdErrPath.Replace('"', '""')
+    $launcher = @(
+        "@echo off",
+        "cd /d `"$escapedRoot`"",
+        "`"$escapedFilePath`" $escapedArguments > `"$escapedStdOutPath`" 2> `"$escapedStdErrPath`""
+    )
+    Set-Content -Path $launcherPath -Value $launcher -Encoding ascii
 
     $process = Start-Process `
         -FilePath "cmd.exe" `
-        -ArgumentList @("/k", $command) `
+        -ArgumentList @("/k", "`"$launcherPath`"") `
         -WorkingDirectory $ProjectRoot `
         -WindowStyle Hidden `
         -PassThru
@@ -95,8 +101,8 @@ if ($Migrate) {
 }
 
 $ResolvedApiPort = Resolve-ApiPort -PreferredPort $ApiPort
-$ApiOutLog = Join-Path $RunDir "api.out.log"
-$ApiErrLog = Join-Path $RunDir "api.err.log"
+$ApiOutLog = Join-Path $RunDir "api.$ResolvedApiPort.out.log"
+$ApiErrLog = Join-Path $RunDir "api.$ResolvedApiPort.err.log"
 $ApiPid = Join-Path $RunDir "api.pid"
 
 Start-BackgroundProcess `
