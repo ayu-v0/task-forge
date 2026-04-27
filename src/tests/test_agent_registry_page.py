@@ -297,6 +297,16 @@ def test_root_route_serves_agent_registry_home_page() -> None:
     assert "/console/vue/" in response.text
 
 
+def test_agent_registry_vue_module_asset_uses_javascript_mime_type() -> None:
+    js_assets = list((ROOT / "src" / "apps" / "web" / "dist" / "assets").glob("*.js"))
+    assert js_assets
+
+    response = client.get(f"/console/vue/assets/{js_assets[0].name}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/javascript")
+
+
 def test_agent_registry_vue_source_includes_required_drawer_interactions() -> None:
     component_path = ROOT / "src" / "apps" / "web" / "vue" / "src" / "AgentRegistry.vue"
     component_source = component_path.read_text(encoding="utf-8")
