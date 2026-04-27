@@ -7,8 +7,14 @@ const overviewMetrics = document.getElementById("overview-metrics");
 const riskGroups = document.getElementById("risk-groups");
 const dependencyMap = document.getElementById("dependency-map");
 const artifactList = document.getElementById("artifact-list");
+const timelineHeading = document.getElementById("timeline-heading");
 const timelineList = document.getElementById("timeline-list");
 const taskGrid = document.getElementById("task-grid");
+
+let batchTasks = [];
+let selectedTaskId = "";
+let selectedTaskTitle = "";
+let taskTimelineAbortController = null;
 
 function formatDate(value) {
   const date = new Date(value);
@@ -80,7 +86,7 @@ function renderRiskGroups(summary) {
 
   const categoryGroups = (summary.failure_categories ?? []).map((item) => ({
     key: item.category,
-    label: `Error category · ${item.category}`,
+    label: `Error category - ${item.category}`,
     items: tasks.filter((task) => task.error_category === item.category),
     description: `${item.count} task${item.count === 1 ? "" : "s"} currently grouped here.`,
   }));
@@ -94,9 +100,9 @@ function renderRiskGroups(summary) {
   riskGroups.innerHTML = activeGroups
     .map(
       (group) => `
-        <section class="risk-group ${group.key}">
-          <strong>${group.label}</strong>
-          <p>${group.description}</p>
+        <section class="risk-group ${escapeHtml(group.key)}">
+          <strong>${escapeHtml(group.label)}</strong>
+          <p>${escapeHtml(group.description)}</p>
           <ul>
             ${group.items.map((task) => `<li>${escapeHtml(task.title)} (${escapeHtml(task.task_id)})</li>`).join("")}
           </ul>
@@ -171,9 +177,39 @@ function renderArtifacts(artifacts) {
     .join("");
 }
 
-function renderTimeline(items) {
+function renderTimelinePrompt() {
+  timelineHeading.textContent = "Select a task to inspect its trajectory";
+  timelineList.innerHTML = `
+    <article class="timeline-empty">
+      Select a task to inspect its execution trajectory.
+    </article>
+  `;
+}
+
+function renderTimelineLoading(task) {
+  timelineHeading.textContent = `Loading trajectory for ${task.title}`;
+  timelineList.innerHTML = `
+    <article class="timeline-loading">
+      Loading execution trajectory for ${escapeHtml(task.title)}...
+    </article>
+  `;
+}
+
+function renderTimelineError(message) {
+  timelineHeading.textContent = selectedTaskTitle
+    ? `Unable to load ${selectedTaskTitle}`
+    : "Unable to load task trajectory";
+  timelineList.innerHTML = `<article class="timeline-error">${escapeHtml(message)}</article>`;
+}
+
+function renderTaskTimeline(task, items) {
+  timelineHeading.textContent = `${task.title} trajectory`;
   if (!items.length) {
-    timelineList.innerHTML = `<article class="empty-state">No execution timeline available for this batch.</article>`;
+    timelineList.innerHTML = `
+      <article class="timeline-empty">
+        No execution timeline available for this task.
+      </article>
+    `;
     return;
   }
 
@@ -188,14 +224,60 @@ function renderTimeline(items) {
           <p>${escapeHtml(item.detail ?? "No additional detail.")}</p>
           <p class="timeline-meta">
             ${escapeHtml(formatDate(item.timestamp))}
-            · task ${escapeHtml(item.task_id ?? "batch")}
-            · run ${escapeHtml(item.run_id ?? "n/a")}
-            · actor ${escapeHtml(item.actor ?? "system")}
+            / task ${escapeHtml(item.task_id ?? "n/a")}
+            / run ${escapeHtml(item.run_id ?? "n/a")}
+            / actor ${escapeHtml(item.actor ?? "system")}
           </p>
         </article>
       `,
     )
     .join("");
+}
+
+async function loadTaskTimeline(task) {
+  if (taskTimelineAbortController) {
+    taskTimelineAbortController.abort();
+  }
+  taskTimelineAbortController = new AbortController();
+  renderTimelineLoading(task);
+
+  try {
+    const response = await fetch(`/tasks/${task.task_id}/timeline`, {
+      signal: taskTimelineAbortController.signal,
+    });
+    if (response.status === 404) {
+      throw new Error("Task timeline not found.");
+    }
+    if (!response.ok) {
+      throw new Error(`Task timeline request failed with status ${response.status}`);
+    }
+    const payload = await response.json();
+    if (selectedTaskId !== task.task_id) {
+      return;
+    }
+    renderTaskTimeline(task, payload.items || []);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
+    if (selectedTaskId !== task.task_id) {
+      return;
+    }
+    renderTimelineError(error.message || "Unable to load task timeline.");
+  }
+}
+
+function selectTask(taskId) {
+  const task = batchTasks.find((item) => item.task_id === taskId);
+  if (!task) {
+    renderTimelineError("Selected task is not available in this batch.");
+    return;
+  }
+
+  selectedTaskId = task.task_id;
+  selectedTaskTitle = task.title;
+  renderTasks(batchTasks);
+  loadTaskTimeline(task);
 }
 
 function taskFlags(task) {
@@ -230,12 +312,19 @@ function renderTasks(tasks) {
       const outputText = Object.keys(task.output_snapshot ?? {}).length
         ? escapeHtml(JSON.stringify(task.output_snapshot, null, 2))
         : "No output snapshot";
+      const selectedClass = selectedTaskId === task.task_id ? " selected" : "";
       return `
-        <article class="task-card ${escapeHtml(task.status)}">
+        <article
+          class="task-card ${escapeHtml(task.status)}${selectedClass}"
+          data-task-id="${escapeHtml(task.task_id)}"
+          role="button"
+          tabindex="0"
+          aria-pressed="${selectedTaskId === task.task_id ? "true" : "false"}"
+        >
           <div class="task-header">
             <div>
               <h3>${escapeHtml(task.title)}</h3>
-              <p class="task-meta">${escapeHtml(task.task_type)} · ${escapeHtml(task.task_id)}</p>
+              <p class="task-meta">${escapeHtml(task.task_type)} / ${escapeHtml(task.task_id)}</p>
             </div>
             <span class="status-badge status-${escapeHtml(task.status)}">${escapeHtml(task.status)}</span>
           </div>
@@ -303,6 +392,27 @@ function renderError(message) {
   taskGrid.innerHTML = `<article class="empty-state">${escapeHtml(message)}</article>`;
 }
 
+taskGrid.addEventListener("click", (event) => {
+  if (event.target.closest("a")) {
+    return;
+  }
+  const taskCard = event.target.closest(".task-card[data-task-id]");
+  if (taskCard) {
+    selectTask(taskCard.dataset.taskId);
+  }
+});
+
+taskGrid.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  const taskCard = event.target.closest(".task-card[data-task-id]");
+  if (taskCard) {
+    event.preventDefault();
+    selectTask(taskCard.dataset.taskId);
+  }
+});
+
 async function loadBatchDetail() {
   const batchId = batchIdFromPath();
   if (!batchId) {
@@ -313,30 +423,24 @@ async function loadBatchDetail() {
   statusText.textContent = "Loading batch summary...";
 
   try {
-    const [summaryResponse, timelineResponse] = await Promise.all([
-      fetch(`/task-batches/${batchId}/summary`),
-      fetch(`/task-batches/${batchId}/timeline`),
-    ]);
-    if (summaryResponse.status === 404 || timelineResponse.status === 404) {
+    const summaryResponse = await fetch(`/task-batches/${batchId}/summary`);
+    if (summaryResponse.status === 404) {
       throw new Error("Batch not found.");
     }
     if (!summaryResponse.ok) {
       throw new Error(`Summary request failed with status ${summaryResponse.status}`);
     }
-    if (!timelineResponse.ok) {
-      throw new Error(`Timeline request failed with status ${timelineResponse.status}`);
-    }
 
-    const [summary, timeline] = await Promise.all([
-      summaryResponse.json(),
-      timelineResponse.json(),
-    ]);
+    const summary = await summaryResponse.json();
+    batchTasks = summary.tasks || [];
+    selectedTaskId = "";
+    selectedTaskTitle = "";
     statusText.textContent = `Batch ${summary.batch.id} is currently ${summary.derived_status}.`;
     renderOverview(summary);
     renderRiskGroups(summary);
     renderDependencyMap(summary.tasks);
     renderArtifacts(summary.artifacts);
-    renderTimeline(timeline.items);
+    renderTimelinePrompt();
     renderTasks(summary.tasks);
   } catch (error) {
     renderError(error.message);

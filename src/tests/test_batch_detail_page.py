@@ -144,14 +144,20 @@ def test_batch_detail_page_can_link_to_run_detail_when_latest_run_exists() -> No
     assert "View run detail" in response.text
 
 
-def test_batch_detail_page_assets_include_batch_timeline() -> None:
+def test_batch_detail_page_uses_task_timeline_on_task_selection() -> None:
     page_response = client.get("/console/batches/sample-batch-id")
     assert page_response.status_code == 200
-    assert "Execution timeline" in page_response.text
+    assert "Task timeline" in page_response.text
+    assert "Select a task to inspect its trajectory" in page_response.text
+    assert "Batch trajectory" not in page_response.text
 
     asset_response = client.get("/console/assets/batch-detail.js")
     assert asset_response.status_code == 200
-    assert "/task-batches/${batchId}/timeline" in asset_response.text
+    assert "/task-batches/${batchId}/timeline" not in asset_response.text
+    assert "/tasks/${task.task_id}/timeline" in asset_response.text
+    assert "selectedTaskId" in asset_response.text
+    assert "loadTaskTimeline" in asset_response.text
+    assert "renderTimelinePrompt" in asset_response.text
     assert "Error category" in asset_response.text
 
 
