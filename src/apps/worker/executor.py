@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+import threading
 from traceback import format_exception
 
 from sqlalchemy import case, func, select
@@ -12,6 +14,9 @@ from src.packages.core.artifacts import build_artifact_payload
 from src.packages.core.db.models import ArtifactORM, AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, ReviewCheckpointORM, TaskORM
 from src.packages.core.task_state_machine import transition_task_status
 from src.packages.core.token_budget import build_execution_budget, build_result_summary
+
+
+_SQLITE_CLAIM_LOCK = threading.Lock()
 
 
 class TaskCancelledError(Exception):
@@ -216,6 +221,13 @@ def _execute_agent(agent: object, task: TaskORM, context: WorkerContext) -> dict
 
 
 def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM] | None:
+    bind = db.get_bind()
+    claim_context = _SQLITE_CLAIM_LOCK if bind.dialect.name == "sqlite" else nullcontext()
+    with claim_context:
+        return _claim_next_task_in_transaction(db)
+
+
+def _claim_next_task_in_transaction(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM] | None:
     with db.begin():
         task = None
         queued_tasks = db.scalars(

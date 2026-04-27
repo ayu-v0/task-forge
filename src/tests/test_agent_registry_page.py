@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from src.packages.core.db.models import ExecutionRunORM
+from src.packages.core.db.models import ExecutionRunORM, TaskBatchORM, TaskORM
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -148,8 +148,6 @@ def _insert_runs(task_id: str, agent_role_id: str, run_statuses: list[str]) -> N
 
 
 def _seed_registry_history(*, suffix: str, run_statuses: list[str]) -> dict:
-    batch_id = f"batch_{uuid.uuid4().hex}"
-    task_id = f"task_{uuid.uuid4().hex}"
     role = _register_agent(
         client,
         role_name=f"{TEST_ROLE_PREFIX}{suffix}",
@@ -160,86 +158,31 @@ def _seed_registry_history(*, suffix: str, run_statuses: list[str]) -> dict:
 
     engine = create_engine(_database_url())
     with Session(engine) as session:
-        session.execute(
-            text(
-                """
-                INSERT INTO task_batches (
-                    id,
-                    title,
-                    description,
-                    created_by,
-                    created_at,
-                    status,
-                    total_tasks,
-                    metadata
-                ) VALUES (
-                    :id,
-                    :title,
-                    :description,
-                    'pytest',
-                    NOW(),
-                    'submitted',
-                    1,
-                    '{}'::jsonb
-                )
-                """
-            ),
-            {
-                "id": batch_id,
-                "title": f"{TEST_BATCH_PREFIX}{suffix}",
-                "description": "registry seeded batch",
-            },
+        batch = TaskBatchORM(
+            title=f"{TEST_BATCH_PREFIX}{suffix}",
+            description="registry seeded batch",
+            created_by="pytest",
+            status="submitted",
+            total_tasks=1,
         )
-        session.execute(
-            text(
-                """
-                INSERT INTO tasks (
-                    id,
-                    batch_id,
-                    title,
-                    description,
-                    task_type,
-                    priority,
-                    status,
-                    input_payload,
-                    expected_output_schema,
-                    assigned_agent_role,
-                    dependency_ids,
-                    retry_count,
-                    cancellation_requested,
-                    cancellation_requested_at,
-                    cancellation_reason,
-                    created_at,
-                    updated_at
-                ) VALUES (
-                    :id,
-                    :batch_id,
-                    :title,
-                    :description,
-                    'registry_success_case',
-                    'medium',
-                    'success',
-                    '{}'::jsonb,
-                    '{}'::jsonb,
-                    :assigned_agent_role,
-                    ARRAY[]::varchar[],
-                    0,
-                    FALSE,
-                    NULL,
-                    NULL,
-                    NOW(),
-                    NOW()
-                )
-                """
-            ),
-            {
-                "id": task_id,
-                "batch_id": batch_id,
-                "title": f"registry task {suffix}",
-                "description": "registry seeded task",
-                "assigned_agent_role": role_name,
-            },
+        session.add(batch)
+        session.flush()
+        task = TaskORM(
+            batch_id=batch.id,
+            title=f"registry task {suffix}",
+            description="registry seeded task",
+            task_type="registry_success_case",
+            priority="medium",
+            status="success",
+            input_payload={},
+            expected_output_schema={},
+            assigned_agent_role=role_name,
+            dependency_ids=[],
+            retry_count=0,
         )
+        session.add(task)
+        session.flush()
+        task_id = task.id
         session.commit()
 
     _insert_runs(task_id, role_id, run_statuses)

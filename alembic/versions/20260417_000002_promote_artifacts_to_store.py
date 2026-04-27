@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 
 revision = "20260417_000002"
@@ -21,19 +20,19 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         "artifacts",
-        sa.Column("raw_content", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("raw_content", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
     )
     op.add_column(
         "artifacts",
-        sa.Column("summary", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("summary", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
     )
     op.add_column(
         "artifacts",
         sa.Column(
             "structured_output",
-            postgresql.JSONB(astext_type=sa.Text()),
+            sa.JSON(),
             nullable=False,
-            server_default=sa.text("'{}'::jsonb"),
+            server_default=sa.text("'{}'"),
         ),
     )
     op.add_column(
@@ -41,10 +40,12 @@ def upgrade() -> None:
         sa.Column("schema_version", sa.String(length=32), nullable=False, server_default="artifact.v1"),
     )
 
-    op.alter_column("artifacts", "raw_content", server_default=None)
-    op.alter_column("artifacts", "summary", server_default=None)
-    op.alter_column("artifacts", "structured_output", server_default=None)
-    op.alter_column("artifacts", "schema_version", server_default=None)
+    bind = op.get_bind()
+    if bind.dialect.name != "sqlite":
+        op.alter_column("artifacts", "raw_content", server_default=None)
+        op.alter_column("artifacts", "summary", server_default=None)
+        op.alter_column("artifacts", "structured_output", server_default=None)
+        op.alter_column("artifacts", "schema_version", server_default=None)
 
 
 def downgrade() -> None:
