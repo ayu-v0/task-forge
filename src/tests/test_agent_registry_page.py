@@ -316,6 +316,10 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert "角色列表" in component_source
     assert "openDrawer" in component_source
     assert "closeDrawer" in component_source
+    assert "isNavOpen" in component_source
+    assert "toggleNav" in component_source
+    assert 'aria-label="Console navigation"' in component_source
+    assert 'aria-controls="console-nav-list"' in component_source
     assert "keydown" in component_source
     assert "statusFilter" in component_source
     assert "Success rate" in component_source
