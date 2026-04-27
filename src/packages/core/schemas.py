@@ -25,6 +25,39 @@ class SchemaModel(BaseModel):
     )
 
 
+class BudgetReportRead(SchemaModel):
+    model_context_limit: int = Field(ge=0, default=0)
+    system_prompt_tokens: int = Field(ge=0, default=0)
+    task_input_tokens: int = Field(ge=0, default=0)
+    dependency_summary_tokens: int = Field(ge=0, default=0)
+    global_background_tokens: int = Field(ge=0, default=0)
+    result_summary_tokens: int = Field(ge=0, default=0)
+    validation_rule_tokens: int = Field(ge=0, default=0)
+    history_background_tokens: int = Field(ge=0, default=0)
+    estimated_input_tokens: int = Field(ge=0, default=0)
+    initial_estimated_input_tokens: int = Field(ge=0, default=0)
+    reserved_output_tokens: int = Field(ge=0, default=0)
+    safe_budget: int = Field(ge=0, default=0)
+    overflow_risk: bool = False
+    initial_overflow_risk: bool = False
+    trim_applied: bool = False
+    trim_steps: list[str] = Field(default_factory=list)
+    degradation_mode: str = "full_context"
+    budget_policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class PromptBudgetPolicyRead(SchemaModel):
+    template_name: str = "default"
+    model_context_limit: int = Field(ge=1, default=128000)
+    max_global_background_tokens: int = Field(ge=0, default=256)
+    max_task_input_tokens: int = Field(ge=0, default=4096)
+    max_dependency_summary_tokens: int = Field(ge=0, default=1024)
+    max_result_summary_tokens: int = Field(ge=0, default=512)
+    max_validation_rule_tokens: int = Field(ge=0, default=512)
+    max_history_background_tokens: int = Field(ge=0, default=256)
+    reserved_output_tokens: int = Field(ge=1, default=256)
+
+
 class TaskBatchCreate(SchemaModel):
     title: str
     description: str | None = None
@@ -55,7 +88,7 @@ class TaskBatchTaskCreate(SchemaModel):
 
 
 class TaskBatchSubmitRequest(TaskBatchCreate):
-    tasks: list[TaskBatchTaskCreate] = Field(min_length=3, max_length=20)
+    tasks: list[TaskBatchTaskCreate] = Field(min_length=1, max_length=20)
 
 
 class TaskBatchSubmitTaskRead(SchemaModel):
@@ -128,6 +161,14 @@ class BatchArtifactRead(SchemaModel):
     artifact_type: str
     uri: str
     content_type: str | None = None
+    raw_content: dict[str, Any] = Field(default_factory=dict)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    structured_output: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_json", "metadata"),
+    )
+    schema_version: str = "artifact.v1"
     created_at: datetime
 
 
@@ -187,6 +228,7 @@ class TaskRead(TaskCreate):
     cancellation_reason: str | None = None
     created_at: datetime
     updated_at: datetime
+    task_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskEventRead(SchemaModel):
@@ -260,6 +302,7 @@ class AgentRoleRegisterRequest(SchemaModel):
     description: str | None = None
     capabilities: list[str] = Field(default_factory=list)
     capability_declaration: AgentCapabilityDeclaration = Field(default_factory=AgentCapabilityDeclaration)
+    prompt_budget_policy: PromptBudgetPolicyRead = Field(default_factory=PromptBudgetPolicyRead)
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     timeout_seconds: int = Field(gt=0, default=300)
@@ -272,6 +315,7 @@ class AgentRoleUpdateRequest(SchemaModel):
     description: str | None = None
     capabilities: list[str] | None = None
     capability_declaration: AgentCapabilityDeclaration | None = None
+    prompt_budget_policy: PromptBudgetPolicyRead | None = None
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     timeout_seconds: int | None = Field(default=None, gt=0)
@@ -286,6 +330,7 @@ class AgentRoleDetailRead(SchemaModel):
     description: str | None = None
     capabilities: list[str] = Field(default_factory=list)
     capability_declaration: AgentCapabilityDeclaration
+    prompt_budget_policy: PromptBudgetPolicyRead = Field(default_factory=PromptBudgetPolicyRead)
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     timeout_seconds: int
@@ -300,6 +345,7 @@ class AgentRegistryListItemRead(SchemaModel):
     description: str | None = None
     capabilities: list[str] = Field(default_factory=list)
     capability_declaration: AgentCapabilityDeclaration
+    prompt_budget_policy: PromptBudgetPolicyRead = Field(default_factory=PromptBudgetPolicyRead)
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     enabled: bool
@@ -357,11 +403,13 @@ class ExecutionRunCreate(SchemaModel):
     cancelled_at: datetime | None = None
     cancel_reason: str | None = None
     token_usage: dict[str, int] = Field(default_factory=dict)
+    budget_report: BudgetReportRead = Field(default_factory=BudgetReportRead)
     latency_ms: int | None = Field(default=None, ge=0)
 
 
 class ExecutionRunRead(ExecutionRunCreate):
     id: str
+    result_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunDetailTaskRead(SchemaModel):
@@ -378,6 +426,21 @@ class RunRoutingRead(SchemaModel):
     routing_reason: str | None = None
     agent_role_id: str | None = None
     agent_role_name: str | None = None
+
+
+class RunRoutingSnapshotRead(SchemaModel):
+    task_id: str
+    run_id: str
+    assignment_id: str | None = None
+    agent_role_id: str | None = None
+    agent_role_name: str | None = None
+    routing_reason: str | None = None
+    task_type: str | None = None
+    input_snapshot: dict[str, Any] = Field(default_factory=dict)
+    expected_output_schema: dict[str, Any] = Field(default_factory=dict)
+    dependency_ids: list[str] = Field(default_factory=list)
+    task_summary: dict[str, Any] = Field(default_factory=dict)
+    dependency_summaries: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class RunRetryHistoryItemRead(SchemaModel):
@@ -398,6 +461,33 @@ class RunDetailRead(SchemaModel):
     events: list[TaskEventRead] = Field(default_factory=list)
     cost_estimate: float = 0
     error_category: str | None = None
+    result_summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunReplayRead(SchemaModel):
+    run: ExecutionRunRead
+    task: RunDetailTaskRead
+    routing_snapshot: RunRoutingSnapshotRead | None = None
+    status_history: list[TaskStatusHistoryItemRead] = Field(default_factory=list)
+    timeline: TaskTimelineRead
+    events: list[TaskEventRead] = Field(default_factory=list)
+    replay_ready: bool = False
+
+
+class BatchReplayItemRead(SchemaModel):
+    task_id: str
+    title: str
+    task_type: str
+    status: str
+    routing_snapshot: RunRoutingSnapshotRead | None = None
+    latest_run: ExecutionRunRead | None = None
+    timeline: TaskTimelineRead
+
+
+class BatchReplayRead(SchemaModel):
+    batch: TaskBatchRead
+    derived_status: str
+    items: list[BatchReplayItemRead] = Field(default_factory=list)
 
 
 class ReviewCheckpointCreate(SchemaModel):
@@ -482,7 +572,14 @@ class ArtifactCreate(SchemaModel):
     artifact_type: str
     uri: str
     content_type: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    raw_content: dict[str, Any] = Field(default_factory=dict)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    structured_output: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("metadata_json", "metadata"),
+    )
+    schema_version: str = "artifact.v1"
 
 
 class ArtifactRead(ArtifactCreate):

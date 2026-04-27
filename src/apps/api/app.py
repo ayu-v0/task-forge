@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from src.apps.api.bootstrap import ensure_builtin_agent_roles
 from src.apps.api.routers import (
     agents_router,
+    artifacts_router,
     health_router,
     reviews_router,
     runs_router,
@@ -27,11 +28,27 @@ app.include_router(health_router)
 app.include_router(task_batches_router)
 app.include_router(tasks_router)
 app.include_router(agents_router)
+app.include_router(artifacts_router)
 app.include_router(runs_router)
 app.include_router(reviews_router)
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+VUE_DIST_DIR = WEB_DIR / "dist"
 app.mount("/console/assets", StaticFiles(directory=WEB_DIR), name="console-assets")
+if VUE_DIST_DIR.exists():
+    app.mount("/console/vue", StaticFiles(directory=VUE_DIST_DIR), name="console-vue")
+
+
+def _agent_registry_page() -> FileResponse:
+    vue_entry = VUE_DIST_DIR / "index.html"
+    if vue_entry.exists():
+        return FileResponse(vue_entry)
+    return FileResponse(WEB_DIR / "agents.html")
+
+
+@app.get("/")
+def console_home() -> FileResponse:
+    return _agent_registry_page()
 
 
 @app.get("/console/batches")
@@ -41,7 +58,7 @@ def console_batches() -> FileResponse:
 
 @app.get("/console/agents")
 def console_agents() -> FileResponse:
-    return FileResponse(WEB_DIR / "agents.html")
+    return _agent_registry_page()
 
 
 @app.get("/console/batches/{batch_id}")

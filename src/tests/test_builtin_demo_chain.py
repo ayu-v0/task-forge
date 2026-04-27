@@ -79,8 +79,10 @@ _cleanup_database()
 
 from src.apps.api.app import app  # noqa: E402
 from src.apps.api.bootstrap import ensure_builtin_agent_roles  # noqa: E402
+from src.apps.worker.builtin_agents import ReviewerWorkerAgent  # noqa: E402
 from src.apps.worker.executor import run_next_task  # noqa: E402
 from src.apps.worker.registry import build_default_registry  # noqa: E402
+from src.packages.core.db.models import TaskORM  # noqa: E402
 
 def setup_function() -> None:
     _cleanup_database()
@@ -89,6 +91,16 @@ def setup_function() -> None:
 
 def teardown_function() -> None:
     _cleanup_database()
+
+
+def _assert_structured_output(payload: dict) -> dict:
+    snapshot = payload["output_snapshot"]
+    assert snapshot["status"] in {"ok", "needs_review"}
+    assert isinstance(snapshot["summary"], str)
+    assert isinstance(snapshot["result"], dict)
+    assert isinstance(snapshot["warnings"], list)
+    assert "next_action_hint" in snapshot
+    return snapshot
 
 
 def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
@@ -116,6 +128,21 @@ def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
         assert reviewer_count == 1
         assert search_count == 1
         assert code_count == 1
+
+        planner_role = client.get("/agents").json()
+        planner_entry = next(item for item in planner_role if item["role_name"] == "planner_agent")
+        worker_entry = next(item for item in planner_role if item["role_name"] == "worker_agent")
+        reviewer_entry = next(item for item in planner_role if item["role_name"] == "reviewer_agent")
+        assert planner_entry["prompt_budget_policy"]["template_name"] == "planner"
+        assert worker_entry["prompt_budget_policy"]["template_name"] == "worker"
+        assert reviewer_entry["prompt_budget_policy"]["template_name"] == "reviewer"
+        assert planner_entry["output_schema"]["output_contract"]["required"] == [
+            "status",
+            "summary",
+            "result",
+            "warnings",
+            "next_action_hint",
+        ]
 
         suffix = uuid.uuid4().hex[:8]
         create_response = client.post("/task-batches", json=_demo_payload(suffix))
@@ -149,15 +176,42 @@ def test_builtin_roles_seeded_once_and_demo_chain_runs() -> None:
                 run_body = candidate
                 break
 
+        run_details = []
+        for summary in run_summaries:
+            run_response = client.get(f"/runs/{summary['run_id']}")
+            assert run_response.status_code == 200
+            run_details.append(run_response.json())
+
+        snapshots = [_assert_structured_output(item) for item in run_details]
+        planner_run = next(item for item in run_details if item["output_snapshot"]["result"].get("stage") == "planner")
+        worker_run = next(item for item in run_details if item["output_snapshot"]["result"].get("stage") == "worker")
+        reviewer_run = next(item for item in run_details if item["output_snapshot"]["result"].get("stage") == "reviewer")
+        assert all(item["result_summary"]["status"] == "success" for item in run_details)
+        assert all(snapshot["summary"] for snapshot in snapshots)
+        assert planner_run["budget_report"]["budget_policy"]["template_name"] == "planner"
+        assert planner_run["budget_report"]["global_background_tokens"] > planner_run["budget_report"]["dependency_summary_tokens"]
+        assert worker_run["budget_report"]["budget_policy"]["template_name"] == "worker"
+        assert (
+            worker_run["budget_report"]["budget_policy"]["max_task_input_tokens"]
+            > worker_run["budget_report"]["budget_policy"]["max_dependency_summary_tokens"]
+        )
+        assert worker_run["budget_report"]["task_input_tokens"] > 0
+        assert reviewer_run["budget_report"]["budget_policy"]["template_name"] == "reviewer"
+        assert reviewer_run["budget_report"]["result_summary_tokens"] > 0
+        assert reviewer_run["budget_report"]["validation_rule_tokens"] > reviewer_run["budget_report"]["history_background_tokens"]
+
         assert run_body["task_id"] == reviewer_task_id
         assert run_body["output_snapshot"]["stage"] == "reviewer"
+        assert run_body["output_snapshot"]["result"]["stage"] == "reviewer"
         assert run_body["output_snapshot"]["validation_passed"] is True
         assert run_body["output_snapshot"]["needs_manual_review"] is False
+        assert run_body["output_snapshot"]["warnings"] == []
 
         for task_id in created_ids:
             task_response = client.get(f"/tasks/{task_id}")
             assert task_response.status_code == 200
             assert task_response.json()["status"] == "success"
+            assert task_response.json()["task_summary"]["task_id"] == task_id
 
             events_response = client.get(f"/tasks/{task_id}/events")
             assert events_response.status_code == 200
@@ -233,14 +287,40 @@ def test_builtin_search_and_code_roles_execute_distinct_outputs() -> None:
             assert run_response.status_code == 200
             run_payloads.append(run_response.json())
 
-        stages = {payload["output_snapshot"].get("stage") for payload in run_payloads}
+        snapshots = [_assert_structured_output(payload) for payload in run_payloads]
+        stages = {snapshot["result"].get("stage") for snapshot in snapshots}
         assert "search" in stages
         assert "code" in stages
         assert any(
-            payload["output_snapshot"].get("search_plan", {}).get("intent") == "research"
-            for payload in run_payloads
+            snapshot["result"].get("search_plan", {}).get("intent") == "research"
+            for snapshot in snapshots
         )
         assert any(
-            payload["output_snapshot"].get("code_plan", {}).get("language") == "python"
-            for payload in run_payloads
+            snapshot["result"].get("code_plan", {}).get("language") == "python"
+            for snapshot in snapshots
         )
+
+
+def test_reviewer_prefers_structured_output_result_when_present() -> None:
+    reviewer = ReviewerWorkerAgent()
+    task = TaskORM(
+        id="task-reviewer-1",
+        task_type="reviewer_validate",
+        input_payload={
+            "raw_output": {
+                "status": "ok",
+                "summary": "worker completed",
+                "result": {"artifact_id": "artifact-1", "approved": True},
+                "warnings": [],
+                "next_action_hint": "publish artifact",
+            }
+        },
+    )
+
+    payload = reviewer.run(task, {"run_id": "run-1"})
+
+    assert payload["status"] == "ok"
+    assert payload["summary"] == "auto review passed"
+    assert payload["result"]["review_target"] == {"artifact_id": "artifact-1", "approved": True}
+    assert payload["result"]["validation_passed"] is True
+    assert payload["warnings"] == []

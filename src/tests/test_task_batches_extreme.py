@@ -102,6 +102,20 @@ def test_submit_maximum_20_tasks() -> None:
     assert batch_body["status"] == "draft"
 
 
+def test_submit_single_task_batch_creates_one_task() -> None:
+    response = client.post("/task-batches", json=_payload(task_count=1))
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["original_task_count"] == 1
+    assert body["normalized_task_count"] == 1
+    assert len(body["tasks"]) == 1
+
+    batch_response = client.get(f"/task-batches/{body['batch_id']}")
+    assert batch_response.status_code == 200
+    assert batch_response.json()["total_tasks"] == 1
+
+
 def test_submit_and_fetch_batch_with_dependencies() -> None:
     response = client.post("/task-batches", json=_payload(task_count=3))
 

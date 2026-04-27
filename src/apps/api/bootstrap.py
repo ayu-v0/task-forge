@@ -7,6 +7,19 @@ from src.apps.api.deps import engine
 from src.packages.core.db.models import AgentRoleORM
 
 
+BUILTIN_OUTPUT_CONTRACT = {
+    "type": "object",
+    "required": ["status", "summary", "result", "warnings", "next_action_hint"],
+    "properties": {
+        "status": {"type": "string"},
+        "summary": {"type": "string"},
+        "result": {"type": "object"},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+        "next_action_hint": {"type": ["string", "null"]},
+    },
+}
+
+
 BUILTIN_ROLES: tuple[dict, ...] = (
     {
         "role_name": "search_agent",
@@ -17,8 +30,19 @@ BUILTIN_ROLES: tuple[dict, ...] = (
             "input_requirements": {"properties": {"query": {"type": "string"}}},
             "supports_concurrency": True,
             "allows_auto_retry": False,
+            "prompt_budget_policy": {
+                "template_name": "worker",
+                "model_context_limit": 128000,
+                "max_global_background_tokens": 256,
+                "max_task_input_tokens": 4096,
+                "max_dependency_summary_tokens": 768,
+                "max_result_summary_tokens": 256,
+                "max_validation_rule_tokens": 512,
+                "max_history_background_tokens": 128,
+                "reserved_output_tokens": 512,
+            },
         },
-        "output_schema": {"output_contract": {"type": "object"}},
+        "output_schema": {"output_contract": BUILTIN_OUTPUT_CONTRACT},
     },
     {
         "role_name": "code_agent",
@@ -34,8 +58,19 @@ BUILTIN_ROLES: tuple[dict, ...] = (
             },
             "supports_concurrency": True,
             "allows_auto_retry": False,
+            "prompt_budget_policy": {
+                "template_name": "worker",
+                "model_context_limit": 128000,
+                "max_global_background_tokens": 256,
+                "max_task_input_tokens": 4096,
+                "max_dependency_summary_tokens": 768,
+                "max_result_summary_tokens": 256,
+                "max_validation_rule_tokens": 512,
+                "max_history_background_tokens": 128,
+                "reserved_output_tokens": 768,
+            },
         },
-        "output_schema": {"output_contract": {"type": "object"}},
+        "output_schema": {"output_contract": BUILTIN_OUTPUT_CONTRACT},
     },
     {
         "role_name": "planner_agent",
@@ -45,8 +80,19 @@ BUILTIN_ROLES: tuple[dict, ...] = (
             "supported_task_types": ["planner_preprocess"],
             "supports_concurrency": True,
             "allows_auto_retry": False,
+            "prompt_budget_policy": {
+                "template_name": "planner",
+                "model_context_limit": 128000,
+                "max_global_background_tokens": 2048,
+                "max_task_input_tokens": 2048,
+                "max_dependency_summary_tokens": 256,
+                "max_result_summary_tokens": 128,
+                "max_validation_rule_tokens": 512,
+                "max_history_background_tokens": 256,
+                "reserved_output_tokens": 1024,
+            },
         },
-        "output_schema": {},
+        "output_schema": {"output_contract": BUILTIN_OUTPUT_CONTRACT},
     },
     {
         "role_name": "worker_agent",
@@ -56,8 +102,19 @@ BUILTIN_ROLES: tuple[dict, ...] = (
             "supported_task_types": ["worker_execute"],
             "supports_concurrency": True,
             "allows_auto_retry": False,
+            "prompt_budget_policy": {
+                "template_name": "worker",
+                "model_context_limit": 128000,
+                "max_global_background_tokens": 256,
+                "max_task_input_tokens": 4096,
+                "max_dependency_summary_tokens": 768,
+                "max_result_summary_tokens": 256,
+                "max_validation_rule_tokens": 512,
+                "max_history_background_tokens": 128,
+                "reserved_output_tokens": 768,
+            },
         },
-        "output_schema": {},
+        "output_schema": {"output_contract": BUILTIN_OUTPUT_CONTRACT},
     },
     {
         "role_name": "reviewer_agent",
@@ -67,8 +124,19 @@ BUILTIN_ROLES: tuple[dict, ...] = (
             "supported_task_types": ["reviewer_validate"],
             "supports_concurrency": True,
             "allows_auto_retry": False,
+            "prompt_budget_policy": {
+                "template_name": "reviewer",
+                "model_context_limit": 128000,
+                "max_global_background_tokens": 256,
+                "max_task_input_tokens": 1024,
+                "max_dependency_summary_tokens": 256,
+                "max_result_summary_tokens": 4096,
+                "max_validation_rule_tokens": 2048,
+                "max_history_background_tokens": 64,
+                "reserved_output_tokens": 512,
+            },
         },
-        "output_schema": {},
+        "output_schema": {"output_contract": BUILTIN_OUTPUT_CONTRACT},
     },
 )
 

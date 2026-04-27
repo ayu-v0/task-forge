@@ -1,4 +1,5 @@
 from .base import Base
+from .config import DatabaseConfig, load_database_config
 from .models import (
     AgentRoleORM,
     ArtifactORM,
@@ -16,6 +17,7 @@ __all__ = [
     "ArtifactORM",
     "AssignmentORM",
     "Base",
+    "DatabaseConfig",
     "EventLogORM",
     "ExecutionRunORM",
     "ReviewCheckpointORM",
@@ -23,4 +25,5 @@ __all__ = [
     "TaskORM",
     "create_engine_from_env",
     "get_database_url",
+    "load_database_config",
 ]

@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from src.tests.db_test_utils import decode_json_value
 
 ROOT = Path(__file__).resolve().parents[2]
 STATE_MACHINE_PREFIX = "state-machine-test-"
@@ -120,9 +121,10 @@ def test_records_event_log_for_successful_transitions() -> None:
         ).scalar_one()
 
     assert statuses == ["queued", "running", "success"]
-    assert payload["from_status"] == "pending"
-    assert payload["to_status"] == "queued"
-    assert payload["source"] == "router"
+    decoded_payload = decode_json_value(payload)
+    assert decoded_payload["from_status"] == "pending"
+    assert decoded_payload["to_status"] == "queued"
+    assert decoded_payload["source"] == "router"
 
 
 def test_supports_retry_transition_from_failed_to_queued() -> None:
@@ -143,6 +145,26 @@ def test_supports_retry_transition_from_failed_to_queued() -> None:
         ).scalar_one()
 
     assert status_value == "queued"
+
+
+def test_supports_dependency_failure_transition_from_blocked_to_failed() -> None:
+    engine = create_engine(_database_url())
+    task_id = _create_task("blocked")
+
+    with Session(engine) as session:
+        task = session.get(TaskORM, task_id)
+        assert task is not None
+
+        transition_task_status(session, task, "failed", "dependency failed", "worker")
+        session.commit()
+
+    with engine.connect() as conn:
+        status_value = conn.execute(
+            text("SELECT status FROM tasks WHERE id = :task_id"),
+            {"task_id": task_id},
+        ).scalar_one()
+
+    assert status_value == "failed"
 
 
 def test_rejects_illegal_transition_without_writing_event_log() -> None:

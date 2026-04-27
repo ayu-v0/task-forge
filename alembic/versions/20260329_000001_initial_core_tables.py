@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 
 revision = "20260329_000001"
@@ -27,7 +26,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False),
         sa.Column("total_tasks", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("metadata", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_task_batches_created_by", "task_batches", ["created_by"], unique=False)
@@ -38,9 +37,9 @@ def upgrade() -> None:
         sa.Column("id", sa.String(length=64), nullable=False),
         sa.Column("role_name", sa.String(length=128), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("capabilities", postgresql.ARRAY(sa.String(length=128)), nullable=False, server_default="{}"),
-        sa.Column("input_schema", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        sa.Column("output_schema", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("capabilities", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
+        sa.Column("input_schema", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column("output_schema", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("timeout_seconds", sa.Integer(), nullable=False, server_default="300"),
         sa.Column("max_retries", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
@@ -59,10 +58,10 @@ def upgrade() -> None:
         sa.Column("task_type", sa.String(length=64), nullable=False),
         sa.Column("priority", sa.String(length=16), nullable=False, server_default="medium"),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="pending"),
-        sa.Column("input_payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        sa.Column("expected_output_schema", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("input_payload", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column("expected_output_schema", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("assigned_agent_role", sa.String(length=255), nullable=True),
-        sa.Column("dependency_ids", postgresql.ARRAY(sa.String(length=64)), nullable=False, server_default="{}"),
+        sa.Column("dependency_ids", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
         sa.Column("retry_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
@@ -98,11 +97,11 @@ def upgrade() -> None:
         sa.Column("run_status", sa.String(length=32), nullable=False, server_default="queued"),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("logs", postgresql.ARRAY(sa.Text()), nullable=False, server_default="{}"),
-        sa.Column("input_snapshot", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        sa.Column("output_snapshot", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("logs", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
+        sa.Column("input_snapshot", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column("output_snapshot", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("error_message", sa.Text(), nullable=True),
-        sa.Column("token_usage", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("token_usage", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("latency_ms", sa.Integer(), nullable=True),
         sa.ForeignKeyConstraint(["agent_role_id"], ["agent_roles.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["task_id"], ["tasks.id"], ondelete="CASCADE"),
@@ -136,7 +135,7 @@ def upgrade() -> None:
         sa.Column("artifact_type", sa.String(length=64), nullable=False),
         sa.Column("uri", sa.Text(), nullable=False),
         sa.Column("content_type", sa.String(length=128), nullable=True),
-        sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("metadata", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["run_id"], ["execution_runs.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["task_id"], ["tasks.id"], ondelete="CASCADE"),
@@ -155,7 +154,7 @@ def upgrade() -> None:
         sa.Column("event_type", sa.String(length=64), nullable=False),
         sa.Column("event_status", sa.String(length=32), nullable=True),
         sa.Column("message", sa.Text(), nullable=True),
-        sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column("payload", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["batch_id"], ["task_batches.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["run_id"], ["execution_runs.id"], ondelete="CASCADE"),

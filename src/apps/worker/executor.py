@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
+import threading
 from traceback import format_exception
 
 from sqlalchemy import case, func, select
@@ -8,8 +10,13 @@ from sqlalchemy.orm import Session
 
 from src.apps.worker.registry import AgentRegistry
 from src.apps.worker.types import WorkerContext
-from src.packages.core.db.models import AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, TaskORM
+from src.packages.core.artifacts import build_artifact_payload
+from src.packages.core.db.models import ArtifactORM, AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, ReviewCheckpointORM, TaskORM
 from src.packages.core.task_state_machine import transition_task_status
+from src.packages.core.token_budget import build_execution_budget, build_result_summary
+
+
+_SQLITE_CLAIM_LOCK = threading.Lock()
 
 
 class TaskCancelledError(Exception):
@@ -40,6 +47,64 @@ def _dependencies_satisfied(task: TaskORM, db: Session) -> bool:
         .where(TaskORM.id.in_(task.dependency_ids), TaskORM.status == "success")
     )
     return satisfied_count == len(task.dependency_ids)
+
+
+def _review_deadline() -> datetime:
+    return _now().replace(microsecond=0) + timedelta(minutes=30)
+
+
+def _move_task_to_budget_review(
+    db: Session,
+    *,
+    task: TaskORM,
+    assignment: AssignmentORM,
+    agent_role: AgentRoleORM,
+    budget_report: dict,
+) -> None:
+    reason = (
+        f"context trimming exhausted for role={agent_role.role_name}; "
+        f"estimated_input_tokens={budget_report['estimated_input_tokens']} "
+        f"reserved_output_tokens={budget_report['reserved_output_tokens']}"
+    )
+    transition_task_status(
+        db,
+        task,
+        to_status="needs_review",
+        reason=reason,
+        source="worker",
+    )
+    review_checkpoint = ReviewCheckpointORM(
+        task_id=task.id,
+        reason=reason,
+        reason_category="manual_override",
+        timeout_policy="fail_closed",
+        review_status="pending",
+        deadline_at=_review_deadline(),
+    )
+    db.add(review_checkpoint)
+    db.flush()
+    db.add(
+        EventLogORM(
+            batch_id=task.batch_id,
+            task_id=task.id,
+            event_type="review_checkpoint_created",
+            event_status="needs_review",
+            message=reason,
+            payload={
+                "task_id": task.id,
+                "review_id": review_checkpoint.id,
+                "reason": reason,
+                "reason_category": review_checkpoint.reason_category,
+                "timeout_policy": review_checkpoint.timeout_policy,
+                "deadline_at": review_checkpoint.deadline_at.isoformat() if review_checkpoint.deadline_at else None,
+                "source": "worker",
+                "budget_report": budget_report,
+                "assignment_id": assignment.id,
+                "agent_role_id": agent_role.id,
+                "agent_role_name": agent_role.role_name,
+            },
+        )
+    )
 
 
 def unlock_dependent_tasks(db: Session, completed_task_id: str) -> list[str]:
@@ -95,6 +160,48 @@ def unlock_dependent_tasks(db: Session, completed_task_id: str) -> list[str]:
     return unlocked_task_ids
 
 
+def propagate_dependency_failure(db: Session, failed_task_id: str, reason: str) -> list[str]:
+    blocked_tasks = db.scalars(
+        select(TaskORM)
+        .where(TaskORM.status == "blocked")
+        .order_by(TaskORM.created_at.asc())
+    ).all()
+
+    failed_downstream_task_ids: list[str] = []
+    for blocked_task in blocked_tasks:
+        if failed_task_id not in blocked_task.dependency_ids:
+            continue
+
+        transition_task_status(
+            db,
+            blocked_task,
+            to_status="failed",
+            reason=f"dependency task {failed_task_id} failed: {reason}",
+            source="worker",
+        )
+        db.add(
+            EventLogORM(
+                batch_id=blocked_task.batch_id,
+                task_id=blocked_task.id,
+                event_type="task_blocked_by_failed_dependency",
+                event_status="failed",
+                message=f"dependency task {failed_task_id} failed",
+                payload={
+                    "task_id": blocked_task.id,
+                    "failed_dependency_id": failed_task_id,
+                    "reason": reason,
+                    "source": "worker",
+                },
+            )
+        )
+        failed_downstream_task_ids.append(blocked_task.id)
+        failed_downstream_task_ids.extend(
+            propagate_dependency_failure(db, blocked_task.id, reason)
+        )
+
+    return failed_downstream_task_ids
+
+
 def is_task_cancellation_requested(db: Session, task_id: str) -> bool:
     db.expire_all()
     task = db.get(TaskORM, task_id)
@@ -114,6 +221,13 @@ def _execute_agent(agent: object, task: TaskORM, context: WorkerContext) -> dict
 
 
 def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM] | None:
+    bind = db.get_bind()
+    claim_context = _SQLITE_CLAIM_LOCK if bind.dialect.name == "sqlite" else nullcontext()
+    with claim_context:
+        return _claim_next_task_in_transaction(db)
+
+
+def _claim_next_task_in_transaction(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM] | None:
     with db.begin():
         task = None
         queued_tasks = db.scalars(
@@ -158,18 +272,60 @@ def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM
         agent_role = db.get(AgentRoleORM, assignment.agent_role_id)
         if agent_role is None:
             return None
+        execution_budget = build_execution_budget(db, task, agent_role)
+        budget_report = execution_budget["budget_report"]
+        trimmed_input_payload = execution_budget["trimmed_input_payload"]
+        task_summary = execution_budget["task_summary"]
+        dependency_summaries = execution_budget["dependency_summaries"]
+        if budget_report["overflow_risk"]:
+            _move_task_to_budget_review(
+                db,
+                task=task,
+                assignment=assignment,
+                agent_role=agent_role,
+                budget_report=budget_report,
+            )
+            return None
+        task.input_payload = trimmed_input_payload
         run = ExecutionRunORM(
             task_id=task.id,
             agent_role_id=assignment.agent_role_id,
             run_status="running",
             started_at=_now(),
-            logs=["claimed by worker"],
-            input_snapshot=task.input_payload,
+            logs=[
+                "claimed by worker",
+                (
+                    "budget estimated: "
+                    f"input={budget_report['estimated_input_tokens']} "
+                    f"reserved_output={budget_report['reserved_output_tokens']} "
+                    f"overflow_risk={budget_report['overflow_risk']}"
+                ),
+            ],
+            input_snapshot=trimmed_input_payload,
             output_snapshot={},
             token_usage={},
+            budget_report=budget_report,
         )
         db.add(run)
         db.flush()
+        if budget_report["trim_applied"]:
+            db.add(
+                EventLogORM(
+                    batch_id=task.batch_id,
+                    task_id=task.id,
+                    run_id=run.id,
+                    event_type="context_trimmed",
+                    event_status="running",
+                    message="worker trimmed execution context to fit prompt budget",
+                    payload={
+                        "task_id": task.id,
+                        "run_id": run.id,
+                        "trim_steps": budget_report["trim_steps"],
+                        "degradation_mode": budget_report["degradation_mode"],
+                        "source": "worker",
+                    },
+                )
+            )
 
         transition_task_status(
             db,
@@ -178,6 +334,32 @@ def claim_next_task(db: Session) -> tuple[TaskORM, ExecutionRunORM, AgentRoleORM
             reason="worker claimed queued task",
             source="worker",
             run_id=run.id,
+        )
+        db.add(
+            EventLogORM(
+                batch_id=task.batch_id,
+                task_id=task.id,
+                run_id=run.id,
+                event_type="execution_run_replay_snapshot",
+                event_status="running",
+                message="worker captured replay snapshot for execution run",
+                payload={
+                    "task_id": task.id,
+                    "run_id": run.id,
+                    "assignment_id": assignment.id,
+                    "agent_role_id": assignment.agent_role_id,
+                    "agent_role_name": agent_role.role_name,
+                    "routing_reason": assignment.routing_reason,
+                    "task_type": task.task_type,
+                    "input_snapshot": trimmed_input_payload,
+                    "expected_output_schema": task.expected_output_schema,
+                    "dependency_ids": task.dependency_ids,
+                    "task_summary": task_summary,
+                    "dependency_summaries": dependency_summaries,
+                    "budget_report": budget_report,
+                    "source": "worker",
+                },
+            )
         )
         db.add(
             EventLogORM(
@@ -211,6 +393,7 @@ def mark_run_success(
     run_id: str,
     result: dict,
     latency_ms: int,
+    token_usage: dict | None = None,
 ) -> ExecutionRunORM:
     if not db.in_transaction():
         with db.begin():
@@ -227,7 +410,28 @@ def mark_run_success(
     run.finished_at = _now()
     run.output_snapshot = result
     run.latency_ms = latency_ms
+    if token_usage is not None:
+        run.token_usage = token_usage
     run.logs = [*run.logs, "execution finished"]
+    artifact_payload = build_artifact_payload(
+        task_id=task.id,
+        run_id=run.id,
+        output_snapshot=result,
+    )
+    artifact = ArtifactORM(
+        task_id=artifact_payload["task_id"],
+        run_id=artifact_payload["run_id"],
+        artifact_type=artifact_payload["artifact_type"],
+        uri=artifact_payload["uri"],
+        content_type=artifact_payload["content_type"],
+        raw_content=artifact_payload["raw_content"],
+        summary=artifact_payload["summary"],
+        structured_output=artifact_payload["structured_output"],
+        metadata_json=artifact_payload["metadata"],
+        schema_version=artifact_payload["schema_version"],
+    )
+    db.add(artifact)
+    db.flush()
 
     transition_task_status(
         db,
@@ -245,7 +449,14 @@ def mark_run_success(
             event_type="execution_run_finished",
             event_status="success",
             message="worker completed execution run",
-            payload={"task_id": task.id, "run_id": run.id},
+            payload={
+                "task_id": task.id,
+                "run_id": run.id,
+                "result_summary": build_result_summary(result),
+                "artifact_id": artifact.id,
+                "artifact_type": artifact.artifact_type,
+                "schema_version": artifact.schema_version,
+            },
         )
     )
     unlocked_task_ids = unlock_dependent_tasks(db, task.id)
@@ -361,9 +572,20 @@ def mark_run_failed(
             event_type="execution_run_finished",
             event_status="failed",
             message="worker execution failed",
-            payload={"task_id": task.id, "run_id": run.id, "error_message": str(exc)},
+            payload={
+                "task_id": task.id,
+                "run_id": run.id,
+                "error_message": str(exc),
+                "result_summary": build_result_summary({}, str(exc)),
+            },
         )
     )
+    failed_downstream_task_ids = propagate_dependency_failure(db, task.id, str(exc))
+    if failed_downstream_task_ids:
+        run.logs = [
+            *run.logs,
+            f"failed dependent tasks: {', '.join(failed_downstream_task_ids)}",
+        ]
     db.flush()
     db.refresh(run)
     return run
@@ -405,12 +627,22 @@ def execute_task(
             cancellation_check=lambda: is_task_cancellation_requested(db, task.id),
         )
         result = _execute_agent(agent, task, context)
+        execution_meta = {}
+        if isinstance(result, dict):
+            execution_meta = result.pop("_execution_meta", {}) or {}
         if is_task_cancellation_requested(db, task.id):
             raise TaskCancelledError("task cancellation requested during execution")
         latency_ms = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000))
         if db.in_transaction():
             db.rollback()
-        return mark_run_success(db, task.id, run.id, result, latency_ms)
+        return mark_run_success(
+            db,
+            task.id,
+            run.id,
+            result,
+            latency_ms,
+            token_usage=execution_meta.get("token_usage"),
+        )
     except TaskCancelledError as exc:
         if db.in_transaction():
             db.rollback()

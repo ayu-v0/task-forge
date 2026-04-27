@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.packages.core.db.models import AgentRoleORM, AssignmentORM, ExecutionRunORM, TaskBatchORM, TaskORM  # noqa: E402
+from src.packages.core.db.session import create_engine_from_env  # noqa: E402
 
 
 def utcnow() -> datetime:
@@ -20,11 +20,7 @@ def utcnow() -> datetime:
 
 
 def main() -> None:
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise RuntimeError("DATABASE_URL is not set")
-
-    engine = create_engine(database_url)
+    engine = create_engine_from_env()
 
     with Session(engine) as session:
         role_name = f"verifier_{int(datetime.now(timezone.utc).timestamp())}"

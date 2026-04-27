@@ -607,6 +607,11 @@ def get_task_batch_summary(batch_id: str, db: Session = Depends(get_db)) -> Task
             artifact_type=artifact.artifact_type,
             uri=artifact.uri,
             content_type=artifact.content_type,
+            raw_content=artifact.raw_content,
+            summary=artifact.summary,
+            structured_output=artifact.structured_output,
+            metadata=artifact.metadata_json,
+            schema_version=artifact.schema_version,
             created_at=artifact.created_at,
         )
         for artifact in artifacts

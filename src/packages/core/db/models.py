@@ -3,8 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -28,7 +27,7 @@ class TaskBatchORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", index=True)
     total_tasks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    metadata_json: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
 
     tasks: Mapped[list["TaskORM"]] = relationship(back_populates="batch", cascade="all, delete-orphan")
     event_logs: Mapped[list["EventLogORM"]] = relationship(back_populates="batch")
@@ -44,10 +43,10 @@ class TaskORM(Base):
     task_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     priority: Mapped[str] = mapped_column(String(16), nullable=False, default="medium", index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
-    input_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    expected_output_schema: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    input_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    expected_output_schema: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     assigned_agent_role: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    dependency_ids: Mapped[list[str]] = mapped_column(ARRAY(String(64)), nullable=False, default=list)
+    dependency_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cancellation_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     cancellation_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -69,9 +68,9 @@ class AgentRoleORM(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: _id("role"))
     role_name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    capabilities: Mapped[list[str]] = mapped_column(ARRAY(String(128)), nullable=False, default=list)
-    input_schema: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    output_schema: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    input_schema: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    output_schema: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
@@ -104,13 +103,14 @@ class ExecutionRunORM(Base):
     run_status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    logs: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
-    input_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    output_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    logs: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    input_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    output_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    token_usage: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    token_usage: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    budget_report: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     task: Mapped["TaskORM"] = relationship(back_populates="execution_runs")
@@ -146,7 +146,11 @@ class ArtifactORM(Base):
     artifact_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     uri: Mapped[str] = mapped_column(Text, nullable=False)
     content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    raw_content: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    structured_output: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="artifact.v1")
+    metadata_json: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
     task: Mapped["TaskORM | None"] = relationship(back_populates="artifacts")
@@ -163,7 +167,7 @@ class EventLogORM(Base):
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     event_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, index=True)
 
     batch: Mapped["TaskBatchORM | None"] = relationship(back_populates="event_logs")

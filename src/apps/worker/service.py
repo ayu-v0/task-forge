@@ -7,6 +7,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from src.apps.worker.registry import get_worker_agent
+from src.packages.core.artifact_store import create_run_artifact
 from src.packages.core.db.models import (
     AgentRoleORM,
     AssignmentORM,
@@ -15,6 +16,7 @@ from src.packages.core.db.models import (
     TaskORM,
 )
 from src.packages.core.task_state_machine import transition_task_status
+from src.packages.core.token_budget import build_execution_budget, build_result_summary
 
 
 class WorkerService:
@@ -89,17 +91,30 @@ class WorkerService:
             raise RuntimeError(f"Assigned agent role {assignment.agent_role_id} not found")
 
         started_at = datetime.now(timezone.utc)
+        execution_budget = build_execution_budget(self.db, task, agent_role)
+        budget_report = execution_budget["budget_report"]
+        task_input_payload = execution_budget["trimmed_input_payload"]
+        task.input_payload = task_input_payload
 
         run = ExecutionRunORM(
             task_id=task.id,
             agent_role_id=agent_role.id,
             run_status="running",
             started_at=started_at,
-            logs=[f"Execution started for role {agent_role.role_name}"],
-            input_snapshot=task.input_payload,
+            logs=[
+                f"Execution started for role {agent_role.role_name}",
+                (
+                    "budget estimated: "
+                    f"input={budget_report['estimated_input_tokens']} "
+                    f"reserved_output={budget_report['reserved_output_tokens']} "
+                    f"overflow_risk={budget_report['overflow_risk']}"
+                ),
+            ],
+            input_snapshot=task_input_payload,
             output_snapshot={},
             error_message=None,
             token_usage={},
+            budget_report=budget_report,
             latency_ms=None,
         )
         self.db.add(run)
@@ -124,11 +139,20 @@ class WorkerService:
                 },
             )
             finished_at = datetime.now(timezone.utc)
+            final_result = dict(result)
+            final_result.setdefault("result_summary", build_result_summary(final_result))
+
             run.run_status = "succeeded"
             run.finished_at = finished_at
-            run.output_snapshot = result
+            run.output_snapshot = final_result
             run.logs = [*run.logs, "Execution completed successfully"]
             run.latency_ms = max(int((finished_at - started_at).total_seconds() * 1000), 0)
+            create_run_artifact(
+                self.db,
+                task_id=task.id,
+                run_id=run.id,
+                result=final_result,
+            )
             assignment.assignment_status = "fulfilled"
             transition_task_status(
                 self.db,

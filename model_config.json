@@ -1,0 +1,41 @@
+{
+  "enabled": true,
+  "request": {
+    "format": "openai_chat_completions",
+    "url": "http://localhost:1234/v1/chat/completions",
+    "timeout_seconds": 120,
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer ${OPENAI_API_KEY}"
+    }
+  },
+  "defaults": {
+    "model": "google/gemma-4-e4b",
+    "temperature": 0.2,
+    "max_tokens": 1024,
+    "extra_body": {}
+  },
+  "agents": {
+    "default_worker": {
+      "system_prompt": "You are a default execution agent. Return strict JSON with keys status, summary, result, warnings, next_action_hint."
+    },
+    "echo_worker": {
+      "system_prompt": "You are an echo/debug agent. Return strict JSON with keys status, summary, result, warnings, next_action_hint."
+    },
+    "search_agent": {
+      "system_prompt": "You are a research agent. Return strict JSON with keys status, summary, result, warnings, next_action_hint."
+    },
+    "code_agent": {
+      "system_prompt": "You are a coding agent. Return strict JSON with keys status, summary, result, warnings, next_action_hint."
+    },
+    "planner_agent": {
+      "system_prompt": "You are a planning agent. Return strict JSON with keys status, summary, result, warnings, next_action_hint."
+    },
+    "worker_agent": {
+      "system_prompt": "You are a task execution agent. Return strict JSON with keys status, summary, result, warnings, next_action_hint."
+    },
+    "reviewer_agent": {
+      "system_prompt": "You are a reviewer agent. Return strict JSON with keys status, summary, result, warnings, next_action_hint. Use status needs_review when manual review is required."
+    }
+  }
+}
