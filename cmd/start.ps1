@@ -2,6 +2,7 @@ param(
     [int]$ApiPort = 8000,
     [switch]$WithWorker,
     [switch]$Migrate,
+    [switch]$SkipMigrate,
     [switch]$InstallDeps,
     [switch]$BuildWeb,
     [switch]$NoPortFallback
@@ -49,6 +50,15 @@ function Resolve-ApiPort {
     throw "No free API port found near $PreferredPort."
 }
 
+function Resolve-DatabaseUrl {
+    $script = "from src.packages.core.db.config import get_database_url; print(get_database_url())"
+    $databaseUrl = & $Python -c $script
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($databaseUrl)) {
+        throw "Unable to resolve database URL."
+    }
+    return $databaseUrl.Trim()
+}
+
 function Start-BackgroundProcess {
     param(
         [string]$Name,
@@ -84,6 +94,8 @@ function Start-BackgroundProcess {
 }
 
 $Python = Resolve-PythonCommand
+$DatabaseUrl = Resolve-DatabaseUrl
+$ShouldAutoMigrate = $DatabaseUrl.StartsWith("sqlite:", [System.StringComparison]::OrdinalIgnoreCase)
 
 if ($InstallDeps) {
     Write-Host "Installing Python dependencies..."
@@ -95,9 +107,14 @@ if ($BuildWeb) {
     npm run build
 }
 
-if ($Migrate) {
+Write-Host "Database: $DatabaseUrl"
+
+if (($Migrate -or $ShouldAutoMigrate) -and -not $SkipMigrate) {
     Write-Host "Running database migrations..."
     & $Python -m alembic upgrade head
+}
+elseif ($SkipMigrate) {
+    Write-Host "Skipping database migrations."
 }
 
 $ResolvedApiPort = Resolve-ApiPort -PreferredPort $ApiPort
