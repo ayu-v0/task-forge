@@ -344,15 +344,52 @@ def test_console_agent_registry_page_is_accessible() -> None:
     response = client.get("/console/agents")
     assert response.status_code == 200
     assert "Agent Registry" in response.text
-    assert "/console/assets/agents.js" in response.text
+    assert "/console/vue/" in response.text
 
 
-def test_agent_registry_assets_include_success_rate_and_diagnosis_copy() -> None:
-    response = client.get("/console/assets/agents.js")
+def test_root_route_serves_agent_registry_home_page() -> None:
+    response = client.get("/")
     assert response.status_code == 200
-    assert "Success rate" in response.text
-    assert "Avg latency" in response.text
-    assert "Retry rate" in response.text
-    assert "Total cost estimate" in response.text
-    assert "Why no suitable role?" in client.get("/console/agents").text
-    assert "No run history" in response.text
+    assert "Agent Registry" in response.text
+    assert "/console/vue/" in response.text
+
+
+def test_agent_registry_vue_source_includes_required_drawer_interactions() -> None:
+    component_path = ROOT / "src" / "apps" / "web" / "vue" / "src" / "AgentRegistry.vue"
+    component_source = component_path.read_text(encoding="utf-8")
+
+    assert "<script setup>" in component_source
+    assert "Agent角色管理" in component_source
+    assert "角色列表" in component_source
+    assert "openDrawer" in component_source
+    assert "closeDrawer" in component_source
+    assert "keydown" in component_source
+    assert "statusFilter" in component_source
+    assert "Success rate" in component_source
+    assert "Avg latency" in component_source
+    assert "Total cost estimate" in component_source
+    assert "Why no suitable role?" in component_source
+    assert "No run history" in component_source
+
+
+def test_agent_registry_vue_source_uses_premium_black_purple_theme() -> None:
+    component_path = ROOT / "src" / "apps" / "web" / "vue" / "src" / "AgentRegistry.vue"
+    component_source = component_path.read_text(encoding="utf-8")
+
+    assert "<style scoped>" in component_source
+    assert "Open Agent Roles" in component_source
+    assert "Role List" in component_source
+    assert "#6366f1" in component_source
+    assert "#8b5cf6" in component_source
+    assert "#a855f7" in component_source
+    assert "radial-gradient(circle at 50% 0%" in component_source
+    assert "backdrop-filter: blur(18px)" in component_source
+
+
+def test_agent_registry_built_css_does_not_disable_body_interaction() -> None:
+    css_assets = list((ROOT / "src" / "apps" / "web" / "dist" / "assets").glob("*.css"))
+    assert css_assets
+
+    built_css = "\n".join(path.read_text(encoding="utf-8") for path in css_assets)
+    assert "body{position:fixed" not in built_css
+    assert "body{margin:0" in built_css

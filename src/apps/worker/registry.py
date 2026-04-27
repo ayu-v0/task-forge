@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from src.apps.worker.http_model_agent import run_model_agent_if_enabled
 from src.apps.worker.types import AgentRunner, WorkerContext
 from src.packages.sdk.base_agent import BaseAgent
 from src.packages.core.db.models import TaskORM
@@ -21,6 +22,9 @@ class DefaultWorkerAgent(BaseAgent):
     capabilities = ["default_worker"]
 
     def run(self, task: TaskORM, context: WorkerContext) -> dict:
+        http_result = run_model_agent_if_enabled("default_worker", task, context)
+        if http_result is not None:
+            return http_result
         return {
             "status": "ok",
             "task_id": task.id,
