@@ -609,7 +609,173 @@ def test_worker_injects_downstream_summary_for_dependency_handoffs() -> None:
     assert downstream_summary[0]["task_id"] == task_ids[0]
     assert downstream_summary[0]["result_summary"]["structured_result"]["kind"] == "object"
     assert downstream_summary[0]["result_summary"]["summary"]["artifact"].endswith("[summary len=4000]")
+    assert "raw_content" not in downstream_summary[0]
     assert "latest_output" not in downstream_summary[0]
+
+
+def test_worker_expands_dependency_raw_content_only_when_explicitly_requested() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role_name = f"{TEST_PREFIX}dependency-raw-{suffix}"
+    _register_agent(
+        client,
+        role_name=role_name,
+        capabilities=[f"task:{role_name}"],
+        supported_task_types=[role_name],
+    )
+
+    payload = {
+        "title": f"{TEST_PREFIX}dependency-raw-batch-{suffix}",
+        "description": "dependency raw expansion batch",
+        "created_by": "pytest",
+        "metadata": {"suite": "worker-dependency-raw"},
+        "tasks": [
+            {
+                "client_task_id": "task_1",
+                "title": f"{TEST_PREFIX}dependency-raw-{suffix}-1",
+                "task_type": role_name,
+                "priority": "medium",
+                "input_payload": {"text": "seed"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+            {
+                "client_task_id": "task_2",
+                "title": f"{TEST_PREFIX}dependency-raw-{suffix}-2",
+                "task_type": role_name,
+                "priority": "medium",
+                "input_payload": {"text": "consumer"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": ["task_1"],
+            },
+            {
+                "client_task_id": "task_3",
+                "title": f"{TEST_PREFIX}dependency-raw-{suffix}-3",
+                "task_type": role_name,
+                "priority": "medium",
+                "input_payload": {"text": "tail"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+        ],
+    }
+    response = client.post("/task-batches", json=payload)
+    assert response.status_code == 201
+    task_ids = [task["task_id"] for task in response.json()["tasks"]]
+    dependent_task_id = task_ids[1]
+
+    registry = AgentRegistry()
+    registry.register(role_name, LongResultAgent())
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        dependent_task = session.get(TaskORM, dependent_task_id)
+        assert dependent_task is not None
+        dependent_task.input_payload = {
+            "text": "consumer",
+            "dependency_context": {"include_raw_content": True},
+        }
+        session.commit()
+    with Session(engine) as session:
+        first_run = run_next_task(session, registry)
+        assert first_run is not None
+    claimed_task_ids: list[str] = []
+    for _ in range(3):
+        with Session(engine) as session:
+            next_run = run_next_task(session, registry)
+            if next_run is None:
+                continue
+            claimed_task_ids.append(next_run.task_id)
+            if next_run.task_id == dependent_task_id:
+                break
+    assert dependent_task_id in claimed_task_ids
+
+    dependent_run = client.get(f"/tasks/{dependent_task_id}/runs").json()[0]
+    dependency_context = dependent_run["input_snapshot"]["dependency_summaries"][0]
+    assert dependency_context["task_id"] == task_ids[0]
+    assert dependency_context["raw_content"]["artifact"] == "z" * 4000
+
+
+def test_worker_ignores_raw_content_requests_for_non_dependencies() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role_name = f"{TEST_PREFIX}dependency-filter-{suffix}"
+    _register_agent(
+        client,
+        role_name=role_name,
+        capabilities=[f"task:{role_name}"],
+        supported_task_types=[role_name],
+    )
+
+    payload = {
+        "title": f"{TEST_PREFIX}dependency-filter-batch-{suffix}",
+        "description": "dependency filter batch",
+        "created_by": "pytest",
+        "metadata": {"suite": "worker-dependency-filter"},
+        "tasks": [
+            {
+                "client_task_id": "task_1",
+                "title": f"{TEST_PREFIX}dependency-filter-{suffix}-1",
+                "task_type": role_name,
+                "priority": "medium",
+                "input_payload": {"text": "seed"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+            {
+                "client_task_id": "task_2",
+                "title": f"{TEST_PREFIX}dependency-filter-{suffix}-2",
+                "task_type": role_name,
+                "priority": "medium",
+                "input_payload": {"text": "consumer"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": ["task_1"],
+            },
+            {
+                "client_task_id": "task_3",
+                "title": f"{TEST_PREFIX}dependency-filter-{suffix}-3",
+                "task_type": role_name,
+                "priority": "medium",
+                "input_payload": {"text": "tail"},
+                "expected_output_schema": {"type": "object"},
+                "dependency_client_task_ids": [],
+            },
+        ],
+    }
+    response = client.post("/task-batches", json=payload)
+    assert response.status_code == 201
+    task_ids = [task["task_id"] for task in response.json()["tasks"]]
+    dependent_task_id = task_ids[1]
+
+    registry = AgentRegistry()
+    registry.register(role_name, LongResultAgent())
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        dependent_task = session.get(TaskORM, dependent_task_id)
+        assert dependent_task is not None
+        dependent_task.input_payload = {
+            "text": "consumer",
+            "dependency_context": {"include_raw_content_for_dependency_ids": [task_ids[2]]},
+        }
+        session.commit()
+
+    with Session(engine) as session:
+        first_run = run_next_task(session, registry)
+        assert first_run is not None
+    claimed_task_ids: list[str] = []
+    for _ in range(3):
+        with Session(engine) as session:
+            next_run = run_next_task(session, registry)
+            if next_run is None:
+                continue
+            claimed_task_ids.append(next_run.task_id)
+            if next_run.task_id == dependent_task_id:
+                break
+    assert dependent_task_id in claimed_task_ids
+
+    dependent_run = client.get(f"/tasks/{dependent_task_id}/runs").json()[0]
+    dependency_context = dependent_run["input_snapshot"]["dependency_summaries"][0]
+    assert dependency_context["task_id"] == task_ids[0]
+    assert "raw_content" not in dependency_context
 
 
 def test_worker_trims_context_before_execution_when_budget_overflows() -> None:
