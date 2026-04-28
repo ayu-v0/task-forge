@@ -716,6 +716,14 @@ h1 span {
   color: var(--danger);
 }
 
+.detail-state.warning {
+  border: 1px solid rgba(251, 191, 36, 0.34);
+  border-radius: 14px;
+  background: rgba(251, 191, 36, 0.1);
+  color: var(--warning);
+  padding: 10px 12px;
+}
+
 @media (max-width: 960px) {
   .hero-panel,
   .toolbar {

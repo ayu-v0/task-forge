@@ -34,8 +34,9 @@ ROLE_SYSTEM_PROMPTS = {
         "Use the result object to provide findings, keywords, search plan, and source suggestions."
     ),
     "code_agent": (
-        "You are a code implementation planner. Return concise structured JSON. "
-        "Use the result object to provide implementation steps, risks, and verification guidance."
+        "You are a code implementation agent. Return concise structured JSON. "
+        "When the task asks for code, deliver usable source code as result.deliverables code_file items. "
+        "Use implementation steps and risks only as supporting context, not as the primary deliverable."
     ),
     "planner_agent": (
         "You are a planning agent. Return concise structured JSON. "
@@ -51,7 +52,7 @@ ROLE_SYSTEM_PROMPTS = {
     ),
 }
 
-REQUIRED_FIELDS = ("status", "summary", "result", "warnings", "next_action_hint")
+REQUIRED_FIELDS = ("status", "summary", "result")
 RAW_RESPONSE_PREVIEW_CHARS = 800
 
 
@@ -123,7 +124,7 @@ def _normalize_payload(
     result.setdefault("task_id", task.id)
     result.setdefault("context", _serialize_context(context))
 
-    warnings = payload.get("warnings")
+    warnings = payload.get("warnings", [])
     if not isinstance(warnings, list):
         warnings = [str(warnings)] if warnings else []
 
@@ -160,7 +161,9 @@ def _build_request_body(
     instruction = (
         "Return exactly one JSON object with keys "
         "'status', 'summary', 'result', 'warnings', and 'next_action_hint'. "
-        "The result object should include the useful structured output for this role."
+        "The result object should include the useful structured output for this role. "
+        "If you produce code, include result.deliverables with a code_file item containing "
+        "type, path, language, change_type, and content."
     )
     request_payload = {
         "role_name": role_name,

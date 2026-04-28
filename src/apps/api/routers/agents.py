@@ -122,6 +122,10 @@ def _supported_task_types(agent_role: AgentRoleORM) -> list[str]:
     return []
 
 
+def _declares_task_support(agent_role: AgentRoleORM, task_type: str) -> bool:
+    return task_type in _supported_task_types(agent_role) or f"task:{task_type}" in (agent_role.capabilities or [])
+
+
 def _build_registry_diagnosis(
     agent_roles: list[AgentRoleORM],
     task_type: str,
@@ -130,7 +134,7 @@ def _build_registry_diagnosis(
     matching_disabled_roles: list[str] = []
 
     for agent_role in agent_roles:
-        if task_type not in _supported_task_types(agent_role):
+        if not _declares_task_support(agent_role, task_type):
             continue
         if agent_role.enabled:
             matching_enabled_roles.append(agent_role.role_name)

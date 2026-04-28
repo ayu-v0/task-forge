@@ -49,7 +49,7 @@ BUILTIN_ROLES: tuple[dict, ...] = (
         "description": "Built-in code agent for implementation-oriented tasks",
         "capabilities": ["task:code", "task:implement_feature"],
         "input_schema": {
-            "supported_task_types": [],
+            "supported_task_types": ["code", "implement_feature"],
             "input_requirements": {
                 "properties": {
                     "prompt": {"type": "string"},

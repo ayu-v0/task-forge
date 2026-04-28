@@ -263,6 +263,28 @@ def test_agent_registry_diagnosis_distinguishes_enabled_disabled_and_missing_mat
     assert missing_diagnosis["matching_disabled_roles"] == []
 
 
+def test_agent_registry_diagnosis_matches_capability_declared_task_type() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role = _register_agent(
+        client,
+        role_name=f"{TEST_ROLE_PREFIX}capability-{suffix}",
+        supported_task_types=[],
+    )
+
+    response = client.patch(
+        f"/agents/{role['id']}",
+        json={"capabilities": ["task:capability_only_case"]},
+    )
+    assert response.status_code == 200
+
+    registry_response = client.get("/agents/registry", params={"task_type": "capability_only_case"})
+
+    assert registry_response.status_code == 200
+    diagnosis = registry_response.json()["diagnosis"]
+    assert diagnosis["status"] == "matched_enabled"
+    assert diagnosis["matching_enabled_roles"] == [role["role_name"]]
+
+
 def test_agent_registry_reports_no_run_history_when_role_has_no_runs() -> None:
     suffix = uuid.uuid4().hex[:8]
     role = _register_agent(
@@ -322,6 +344,10 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert 'aria-controls="console-nav-list"' in component_source
     assert "keydown" in component_source
     assert "statusFilter" in component_source
+    assert "inferTaskType" in component_source
+    assert 'return codeKeywords.some((keyword) => normalized.includes(keyword)) ? "code" : "worker_execute";' in component_source
+    assert "buildTaskInputPayload" in component_source
+    assert 'prompt: text' in component_source
     assert "Success rate" in component_source
     assert "Avg latency" in component_source
     assert "Total cost estimate" in component_source
@@ -350,3 +376,15 @@ def test_agent_registry_built_css_does_not_disable_body_interaction() -> None:
     built_css = "\n".join(path.read_text(encoding="utf-8") for path in css_assets)
     assert "body{position:fixed" not in built_css
     assert "body{margin:0" in built_css
+
+
+def test_agent_registry_built_js_infers_code_task_type_for_submission() -> None:
+    js_assets = list((ROOT / "src" / "apps" / "web" / "dist" / "assets").glob("*.js"))
+    assert js_assets
+
+    built_js = "\n".join(path.read_text(encoding="utf-8") for path in js_assets)
+    assert "inferTaskType" in built_js or "worker_execute" in built_js
+    assert "codeKeywords" in built_js or "python" in built_js
+    assert "prompt:" in built_js
+    assert '||"planner_preprocess"' not in built_js
+    assert '|| "planner_preprocess"' not in built_js

@@ -204,5 +204,10 @@ def test_console_batches_assets_load_task_timeline_and_artifacts() -> None:
     assert "/tasks/${task.task_id}/timeline" in response.text
     assert "renderArtifacts" in response.text
     assert "formatArtifactPreview" in response.text
+    assert "renderCodeFileArtifact" in response.text
+    assert "renderCodePatchArtifact" in response.text
+    assert "renderTestReportArtifact" in response.text
+    assert "renderGenericArtifact" in response.text
+    assert "This code task did not produce file-level deliverables." in response.text
     assert "structured_output" in response.text
     assert "raw_content" in response.text

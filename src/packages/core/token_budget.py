@@ -243,8 +243,14 @@ def build_result_summary(output_snapshot: dict[str, Any] | None, error_message: 
         "status": "error" if error_message else ("success" if payload else "empty"),
         "has_output": bool(payload),
         "output_summary": _build_summary(payload),
+        "summary": _build_summary(payload),
         "output_keys": sorted(payload.keys()),
         "field_count": len(payload),
+        "structured_result": {
+            "kind": "object",
+            "keys": sorted(payload.keys()),
+            "field_count": len(payload),
+        },
         "error_summary": _build_summary(error_message) if error_message else None,
     }
 
@@ -276,6 +282,7 @@ def _summary_only_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "summary": _build_summary(payload),
         "structured_result": {
+            "kind": "object",
             "keys": sorted(payload.keys()),
             "field_count": len(payload),
         },
@@ -341,9 +348,11 @@ def _section_counts(
 def build_execution_budget(db: Session, task: TaskORM, agent_role: AgentRoleORM) -> dict[str, Any]:
     policy = _load_policy(agent_role)
     trimmed_payload = deepcopy(task.input_payload or {})
+    trimmed_payload.setdefault("task_summary", _summary_only_payload(task.input_payload or {}))
     dependency_summaries = build_dependency_summaries(db, task)
     if dependency_summaries:
         trimmed_payload["dependency_summaries"] = dependency_summaries
+        trimmed_payload["downstream_summary"] = dependency_summaries
     trim_steps: list[str] = []
     degradation_mode = "full_context"
     history_cap = policy.max_history_background_tokens

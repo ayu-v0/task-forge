@@ -46,6 +46,48 @@ function formatJson(value) {
   return escapeHtml(JSON.stringify(value, null, 2));
 }
 
+function previewText(value, limit = 1200) {
+  const text = String(value ?? "");
+  return text.length <= limit ? text : `${text.slice(0, limit)}...`;
+}
+
+function selectedTaskLooksLikeCode(task) {
+  if (!task) {
+    return false;
+  }
+  const haystack = `${task.task_type || ""} ${task.title || ""} ${task.description || ""}`.toLowerCase();
+  return [
+    "code",
+    "implement",
+    "fix",
+    "bug",
+    "test",
+    "refactor",
+    "script",
+    "config",
+    "代码",
+    "实现",
+    "修复",
+    "测试",
+    "脚本",
+    "配置",
+  ].some((keyword) => haystack.includes(keyword));
+}
+
+function artifactPriority(artifact) {
+  const priorities = {
+    code_file: 0,
+    code_patch: 1,
+    test_report: 2,
+    document: 3,
+    analysis_report: 4,
+    data_file: 5,
+    generic_result: 8,
+    json: 9,
+  };
+  return priorities[artifact.artifact_type] ?? 6;
+}
+
 function renderEmpty(message) {
   batchGrid.innerHTML = `<article class="empty-state">${escapeHtml(message)}</article>`;
 }
@@ -347,6 +389,7 @@ function renderArtifacts(summary, taskId) {
   const artifacts = taskId
     ? allArtifacts.filter((artifact) => artifact.task_id === taskId)
     : allArtifacts;
+  const task = summary.tasks?.find((item) => item.task_id === taskId) || null;
 
   if (!artifacts.length) {
     const otherCount = taskId ? allArtifacts.filter((artifact) => artifact.task_id !== taskId).length : 0;
@@ -358,10 +401,153 @@ function renderArtifacts(summary, taskId) {
     `;
   }
 
-  return artifacts.map((artifact) => formatArtifactPreview(artifact)).join("");
+  const hasFileLevelDeliverable = artifacts.some((artifact) => ["code_file", "code_patch"].includes(artifact.artifact_type));
+  const missingFileDeliverableWarning = selectedTaskLooksLikeCode(task) && !hasFileLevelDeliverable
+    ? `
+      <article class="detail-state warning">
+        This code task did not produce file-level deliverables.
+      </article>
+    `
+    : "";
+  const sortedArtifacts = [...artifacts].sort((left, right) => artifactPriority(left) - artifactPriority(right));
+
+  return `${missingFileDeliverableWarning}${sortedArtifacts.map((artifact) => formatArtifactPreview(artifact)).join("")}`;
 }
 
 function formatArtifactPreview(artifact) {
+  if (artifact.artifact_type === "code_file") {
+    return renderCodeFileArtifact(artifact);
+  }
+  if (artifact.artifact_type === "code_patch") {
+    return renderCodePatchArtifact(artifact);
+  }
+  if (artifact.artifact_type === "test_report") {
+    return renderTestReportArtifact(artifact);
+  }
+  if (["document", "analysis_report", "data_file"].includes(artifact.artifact_type)) {
+    return renderDocumentArtifact(artifact);
+  }
+  return renderGenericArtifact(artifact);
+}
+
+function renderArtifactMeta(artifact) {
+  return `
+    <p class="delivery-uri">${escapeHtml(artifact.uri)}</p>
+    <p class="delivery-meta">
+      created ${escapeHtml(formatDate(artifact.created_at))}
+      / task ${escapeHtml(artifact.task_id || "n/a")}
+      / run ${escapeHtml(artifact.run_id || "n/a")}
+    </p>
+  `;
+}
+
+function renderCodeFileArtifact(artifact) {
+  const summary = artifact.summary || {};
+  const structuredOutput = artifact.structured_output || {};
+  const rawContent = artifact.raw_content || {};
+  const content = rawContent.content || "";
+  const preview = structuredOutput.content_preview || previewText(content);
+
+  return `
+    <article class="delivery-card code-file-card">
+      <div class="delivery-card-head">
+        <strong>${escapeHtml(summary.path || rawContent.path || "Code file")}</strong>
+        <span>${escapeHtml(summary.language || structuredOutput.language || artifact.content_type || "code")}</span>
+      </div>
+      ${renderArtifactMeta(artifact)}
+      <section class="delivery-preview">
+        <strong>${escapeHtml(summary.change_type || structuredOutput.change_type || "modified")}</strong>
+        <p>${escapeHtml(structuredOutput.line_count ?? 0)} line${structuredOutput.line_count === 1 ? "" : "s"}</p>
+        ${preview ? `<pre>${escapeHtml(preview)}</pre>` : "<p>No content preview.</p>"}
+      </section>
+      <details class="delivery-preview">
+        <summary>Full file content</summary>
+        ${content ? `<pre>${escapeHtml(content)}</pre>` : "<p>No file content.</p>"}
+      </details>
+    </article>
+  `;
+}
+
+function renderCodePatchArtifact(artifact) {
+  const summary = artifact.summary || {};
+  const structuredOutput = artifact.structured_output || {};
+  const rawContent = artifact.raw_content || {};
+  const diff = rawContent.diff || "";
+  const filesChanged = summary.files_changed || structuredOutput.files_changed || [];
+  const diffPreview = structuredOutput.diff_preview || previewText(diff);
+
+  return `
+    <article class="delivery-card code-patch-card">
+      <div class="delivery-card-head">
+        <strong>Code patch</strong>
+        <span>${escapeHtml(artifact.content_type || "text/x-diff")}</span>
+      </div>
+      ${renderArtifactMeta(artifact)}
+      <section class="delivery-preview">
+        <strong>${escapeHtml(filesChanged.length)} changed file${filesChanged.length === 1 ? "" : "s"}</strong>
+        <p>+${escapeHtml(summary.insertions ?? 0)} / -${escapeHtml(summary.deletions ?? 0)}</p>
+        ${filesChanged.length ? `<p>${filesChanged.map((path) => escapeHtml(path)).join(", ")}</p>` : "<p>No changed files listed.</p>"}
+        ${diffPreview ? `<pre>${escapeHtml(diffPreview)}</pre>` : "<p>No diff preview.</p>"}
+      </section>
+      <details class="delivery-preview">
+        <summary>Full diff</summary>
+        ${diff ? `<pre>${escapeHtml(diff)}</pre>` : "<p>No diff content.</p>"}
+      </details>
+    </article>
+  `;
+}
+
+function renderTestReportArtifact(artifact) {
+  const summary = artifact.summary || {};
+  const structuredOutput = artifact.structured_output || {};
+  const rawContent = artifact.raw_content || {};
+  const output = rawContent.output || "";
+
+  return `
+    <article class="delivery-card test-report-card">
+      <div class="delivery-card-head">
+        <strong>Test report</strong>
+        <span>${escapeHtml(summary.status || rawContent.status || "unknown")}</span>
+      </div>
+      ${renderArtifactMeta(artifact)}
+      <section class="delivery-preview">
+        <strong>${escapeHtml(summary.command || rawContent.command || "No command")}</strong>
+        ${structuredOutput.output_preview ? `<pre>${escapeHtml(structuredOutput.output_preview)}</pre>` : "<p>No output preview.</p>"}
+      </section>
+      <details class="delivery-preview">
+        <summary>Full test output</summary>
+        ${output ? `<pre>${escapeHtml(output)}</pre>` : "<p>No test output.</p>"}
+      </details>
+    </article>
+  `;
+}
+
+function renderDocumentArtifact(artifact) {
+  const summary = artifact.summary || {};
+  const structuredOutput = artifact.structured_output || {};
+  const rawContent = artifact.raw_content || {};
+  const content = rawContent.content || "";
+
+  return `
+    <article class="delivery-card document-card">
+      <div class="delivery-card-head">
+        <strong>${escapeHtml(summary.title || rawContent.title || artifact.artifact_type)}</strong>
+        <span>${escapeHtml(artifact.content_type || "text/plain")}</span>
+      </div>
+      ${renderArtifactMeta(artifact)}
+      <section class="delivery-preview">
+        ${summary.path || rawContent.path ? `<p>${escapeHtml(summary.path || rawContent.path)}</p>` : ""}
+        ${structuredOutput.content_preview ? `<pre>${escapeHtml(structuredOutput.content_preview)}</pre>` : "<p>No document preview.</p>"}
+      </section>
+      <details class="delivery-preview">
+        <summary>Full content</summary>
+        ${content ? `<pre>${escapeHtml(content)}</pre>` : "<p>No document content.</p>"}
+      </details>
+    </article>
+  `;
+}
+
+function renderGenericArtifact(artifact) {
   const summary = formatJson(artifact.summary);
   const structuredOutput = formatJson(artifact.structured_output);
   const rawContent = formatJson(artifact.raw_content);
@@ -372,12 +558,7 @@ function formatArtifactPreview(artifact) {
         <strong>${escapeHtml(artifact.artifact_type)}</strong>
         <span>${escapeHtml(artifact.content_type || "unknown")}</span>
       </div>
-      <p class="delivery-uri">${escapeHtml(artifact.uri)}</p>
-      <p class="delivery-meta">
-        created ${escapeHtml(formatDate(artifact.created_at))}
-        / task ${escapeHtml(artifact.task_id || "n/a")}
-        / run ${escapeHtml(artifact.run_id || "n/a")}
-      </p>
+      ${renderArtifactMeta(artifact)}
       <section class="delivery-preview">
         <strong>Summary</strong>
         ${summary ? `<pre>${summary}</pre>` : "<p>No summary.</p>"}

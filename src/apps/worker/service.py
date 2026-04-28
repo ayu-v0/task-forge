@@ -7,7 +7,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from src.apps.worker.registry import get_worker_agent
-from src.packages.core.artifact_store import create_run_artifact
+from src.packages.core.artifact_store import create_run_artifacts
 from src.packages.core.db.models import (
     AgentRoleORM,
     AssignmentORM,
@@ -31,7 +31,16 @@ class WorkerService:
         run: ExecutionRunORM,
         agent_role: AgentRoleORM,
         message: str,
+        payload_extra: dict[str, Any] | None = None,
     ) -> None:
+        payload = {
+            "task_id": task.id,
+            "run_id": run.id,
+            "agent_role_id": agent_role.id,
+            "role_name": agent_role.role_name,
+        }
+        if payload_extra:
+            payload.update(payload_extra)
         self.db.add(
             EventLogORM(
                 batch_id=task.batch_id,
@@ -40,12 +49,7 @@ class WorkerService:
                 event_type=event_type,
                 event_status=run.run_status,
                 message=message,
-                payload={
-                    "task_id": task.id,
-                    "run_id": run.id,
-                    "agent_role_id": agent_role.id,
-                    "role_name": agent_role.role_name,
-                },
+                payload=payload,
             )
         )
 
@@ -147,7 +151,7 @@ class WorkerService:
             run.output_snapshot = final_result
             run.logs = [*run.logs, "Execution completed successfully"]
             run.latency_ms = max(int((finished_at - started_at).total_seconds() * 1000), 0)
-            create_run_artifact(
+            artifacts = create_run_artifacts(
                 self.db,
                 task_id=task.id,
                 run_id=run.id,
@@ -168,6 +172,24 @@ class WorkerService:
                 run=run,
                 agent_role=agent_role,
                 message="Worker execution finished",
+                payload_extra={
+                    "artifact_id": artifacts[0].id if artifacts else None,
+                    "artifact_type": artifacts[0].artifact_type if artifacts else None,
+                    "artifact_ids": [artifact.id for artifact in artifacts],
+                    "artifact_types": [artifact.artifact_type for artifact in artifacts],
+                    "deliverable_artifact_ids": [
+                        artifact.id
+                        for artifact in artifacts
+                        if artifact.metadata_json.get("artifact_role") == "final_deliverable"
+                    ],
+                    "deliverable_count": len(
+                        [
+                            artifact
+                            for artifact in artifacts
+                            if artifact.metadata_json.get("artifact_role") == "final_deliverable"
+                        ]
+                    ),
+                },
             )
             self.db.flush()
             return run

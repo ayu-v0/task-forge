@@ -123,6 +123,33 @@ class SummaryAgent:
         return {"status": "ok", "task_id": task.id}
 
 
+class SummaryDeliverableAgent:
+    def run(self, task: TaskORM, context) -> dict:
+        return {
+            "status": "ok",
+            "summary": "created deliverables",
+            "result": {
+                "deliverables": [
+                    {
+                        "type": "code_file",
+                        "path": "src/summary_generated.py",
+                        "language": "python",
+                        "change_type": "created",
+                        "content": "VALUE = 1\n",
+                    },
+                    {
+                        "type": "test_report",
+                        "command": "pytest src/tests/test_summary_generated.py",
+                        "status": "passed",
+                        "output": "1 passed",
+                    },
+                ]
+            },
+            "warnings": [],
+            "next_action_hint": "review deliverables",
+        }
+
+
 def setup_function() -> None:
     _cleanup_database()
 
@@ -285,6 +312,39 @@ def test_summary_aggregates_latest_run_and_artifacts() -> None:
     assert artifact["summary"] == {}
     assert artifact["structured_output"] == {}
     assert artifact["schema_version"] == "artifact.v1"
+
+
+def test_summary_returns_typed_deliverable_artifacts() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role_name = f"{TEST_PREFIX}deliverable-{suffix}"
+    _register_agent(client, role_name=role_name, supported_task_types=[role_name])
+    response = client.post("/task-batches", json=_batch_payload(role_name, suffix))
+    assert response.status_code == 201
+    batch_id = response.json()["batch_id"]
+    task_id = response.json()["tasks"][0]["task_id"]
+
+    engine = create_engine(_database_url())
+    registry = AgentRegistry()
+    registry.register(role_name, SummaryDeliverableAgent())
+    with Session(engine) as session:
+        run = run_next_task(session, registry)
+        assert run is not None
+
+    summary_response = client.get(f"/task-batches/{batch_id}/summary")
+    assert summary_response.status_code == 200
+    payload = summary_response.json()
+    task_summary = next(item for item in payload["tasks"] if item["task_id"] == task_id)
+    assert task_summary["artifact_count"] == 3
+
+    typed_artifacts = [
+        artifact
+        for artifact in payload["artifacts"]
+        if artifact["task_id"] == task_id and artifact["artifact_type"] in {"code_file", "test_report"}
+    ]
+    assert {artifact["artifact_type"] for artifact in typed_artifacts} == {"code_file", "test_report"}
+    code_file = next(artifact for artifact in typed_artifacts if artifact["artifact_type"] == "code_file")
+    assert code_file["uri"] == "workspace://src/summary_generated.py"
+    assert code_file["raw_content"]["content"] == "VALUE = 1\n"
 
 
 def test_summary_groups_failure_categories_from_latest_task_context() -> None:

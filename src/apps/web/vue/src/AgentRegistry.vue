@@ -63,6 +63,55 @@ function roleTaskTypes(agent) {
   return Array.isArray(taskTypes) && taskTypes.length ? taskTypes : ["No explicit task types"];
 }
 
+function inferTaskType(text) {
+  const normalized = text.toLowerCase();
+  const codeKeywords = [
+    "code",
+    "python",
+    "javascript",
+    "typescript",
+    "function",
+    "script",
+    "bug",
+    "test",
+    "refactor",
+    "代码",
+    "函数",
+    "脚本",
+    "实现",
+    "修复",
+    "测试",
+  ];
+  return codeKeywords.some((keyword) => normalized.includes(keyword)) ? "code" : "worker_execute";
+}
+
+function inferLanguage(text) {
+  const normalized = text.toLowerCase();
+  if (normalized.includes("python")) {
+    return "python";
+  }
+  if (normalized.includes("typescript")) {
+    return "typescript";
+  }
+  if (normalized.includes("javascript") || normalized.includes("js")) {
+    return "javascript";
+  }
+  if (normalized.includes("powershell") || normalized.includes("ps1")) {
+    return "powershell";
+  }
+  return "python";
+}
+
+function buildTaskInputPayload(text, normalizedTaskType) {
+  if (normalizedTaskType === "code") {
+    return {
+      prompt: text,
+      language: inferLanguage(text),
+    };
+  }
+  return { text };
+}
+
 function openDrawer() {
   isDrawerOpen.value = true;
   isNavOpen.value = false;
@@ -104,7 +153,7 @@ function buildTaskSubmitPayload(rawText, normalizedTaskType) {
       description: text,
       task_type: normalizedTaskType,
       priority: "medium",
-      input_payload: { text },
+      input_payload: buildTaskInputPayload(text, normalizedTaskType),
       expected_output_schema: { type: "object" },
       dependency_client_task_ids: [],
     })),
@@ -119,7 +168,7 @@ async function submitTaskBatch() {
     return;
   }
 
-  const normalizedTaskType = taskType.value.trim() || "planner_preprocess";
+  const normalizedTaskType = taskType.value.trim() || inferTaskType(rawText);
   submitting.value = true;
   submitMessage.value = "Submitting task batch...";
   submittedBatchId.value = "";
