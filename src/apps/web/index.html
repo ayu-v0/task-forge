@@ -56,6 +56,19 @@
     <section id="batch-grid" class="batch-grid" aria-live="polite"></section>
   </main>
 
+  <section id="batch-detail-overlay" class="detail-overlay" hidden></section>
+  <aside id="batch-detail-panel" class="detail-panel" aria-label="Batch detail" aria-hidden="true">
+    <header class="detail-panel-header">
+      <div>
+        <p class="eyebrow">Batch detail</p>
+        <h2 id="detail-title">Select a batch</h2>
+        <p id="detail-subtitle" class="detail-subtitle"></p>
+      </div>
+      <button id="detail-close-button" class="detail-close-button" type="button">Close</button>
+    </header>
+    <section id="detail-body" class="detail-body"></section>
+  </aside>
+
   <script src="/console/assets/app.js"></script>
 </body>
 </html>

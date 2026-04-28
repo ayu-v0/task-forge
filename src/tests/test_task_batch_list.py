@@ -180,7 +180,29 @@ def test_console_batches_page_is_accessible() -> None:
     assert "Batch Console" in response.text
 
 
-def test_console_batches_assets_include_detail_link_navigation() -> None:
+def test_console_batches_page_includes_embedded_detail_panel() -> None:
+    response = client.get("/console/batches")
+    assert response.status_code == 200
+    assert 'id="batch-detail-overlay"' in response.text
+    assert 'id="batch-detail-panel"' in response.text
+    assert 'id="detail-body"' in response.text
+
+
+def test_console_batches_assets_open_detail_in_panel() -> None:
     response = client.get("/console/assets/app.js")
     assert response.status_code == 200
-    assert "/console/batches/${item.batch_id}" in response.text
+    assert "/console/batches/${item.batch_id}" not in response.text
+    assert "openBatchDetail" in response.text
+    assert "closeBatchDetail" in response.text
+    assert 'data-batch-id="${escapeHtml(item.batch_id)}"' in response.text
+
+
+def test_console_batches_assets_load_task_timeline_and_artifacts() -> None:
+    response = client.get("/console/assets/app.js")
+    assert response.status_code == 200
+    assert "/task-batches/${batchId}/summary" in response.text
+    assert "/tasks/${task.task_id}/timeline" in response.text
+    assert "renderArtifacts" in response.text
+    assert "formatArtifactPreview" in response.text
+    assert "structured_output" in response.text
+    assert "raw_content" in response.text
