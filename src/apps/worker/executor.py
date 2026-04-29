@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from src.apps.worker.registry import AgentRegistry
 from src.apps.worker.types import WorkerContext
-from src.packages.core.artifacts import build_artifact_payload
+from src.packages.core.artifacts import build_artifact_payloads
 from src.packages.core.db.models import ArtifactORM, AgentRoleORM, AssignmentORM, EventLogORM, ExecutionRunORM, ReviewCheckpointORM, TaskORM
 from src.packages.core.task_state_machine import transition_task_status
 from src.packages.core.token_budget import build_execution_budget, build_result_summary
@@ -413,25 +413,34 @@ def mark_run_success(
     if token_usage is not None:
         run.token_usage = token_usage
     run.logs = [*run.logs, "execution finished"]
-    artifact_payload = build_artifact_payload(
+    artifact_payloads = build_artifact_payloads(
         task_id=task.id,
         run_id=run.id,
         output_snapshot=result,
     )
-    artifact = ArtifactORM(
-        task_id=artifact_payload["task_id"],
-        run_id=artifact_payload["run_id"],
-        artifact_type=artifact_payload["artifact_type"],
-        uri=artifact_payload["uri"],
-        content_type=artifact_payload["content_type"],
-        raw_content=artifact_payload["raw_content"],
-        summary=artifact_payload["summary"],
-        structured_output=artifact_payload["structured_output"],
-        metadata_json=artifact_payload["metadata"],
-        schema_version=artifact_payload["schema_version"],
-    )
-    db.add(artifact)
+    artifacts: list[ArtifactORM] = []
+    for artifact_payload in artifact_payloads:
+        artifact = ArtifactORM(
+            task_id=artifact_payload["task_id"],
+            run_id=artifact_payload["run_id"],
+            artifact_type=artifact_payload["artifact_type"],
+            uri=artifact_payload["uri"],
+            content_type=artifact_payload["content_type"],
+            raw_content=artifact_payload["raw_content"],
+            summary=artifact_payload["summary"],
+            structured_output=artifact_payload["structured_output"],
+            metadata_json=artifact_payload["metadata"],
+            schema_version=artifact_payload["schema_version"],
+        )
+        db.add(artifact)
+        artifacts.append(artifact)
     db.flush()
+    primary_artifact = artifacts[0]
+    deliverable_artifacts = [
+        artifact
+        for artifact in artifacts
+        if artifact.metadata_json.get("artifact_role") == "final_deliverable"
+    ]
 
     transition_task_status(
         db,
@@ -453,9 +462,13 @@ def mark_run_success(
                 "task_id": task.id,
                 "run_id": run.id,
                 "result_summary": build_result_summary(result),
-                "artifact_id": artifact.id,
-                "artifact_type": artifact.artifact_type,
-                "schema_version": artifact.schema_version,
+                "artifact_id": primary_artifact.id,
+                "artifact_type": primary_artifact.artifact_type,
+                "artifact_ids": [artifact.id for artifact in artifacts],
+                "artifact_types": [artifact.artifact_type for artifact in artifacts],
+                "deliverable_artifact_ids": [artifact.id for artifact in deliverable_artifacts],
+                "deliverable_count": len(deliverable_artifacts),
+                "schema_version": primary_artifact.schema_version,
             },
         )
     )
@@ -630,6 +643,7 @@ def execute_task(
         execution_meta = {}
         if isinstance(result, dict):
             execution_meta = result.pop("_execution_meta", {}) or {}
+            result.setdefault("result_summary", build_result_summary(result))
         if is_task_cancellation_requested(db, task.id):
             raise TaskCancelledError("task cancellation requested during execution")
         latency_ms = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000))

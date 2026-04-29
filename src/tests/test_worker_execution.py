@@ -166,6 +166,34 @@ class LongResultAgent:
         }
 
 
+class DeliverableAgent:
+    def run(self, task: TaskORM, context) -> dict:
+        return {
+            "status": "ok",
+            "summary": "created code deliverables",
+            "result": {
+                "deliverables": [
+                    {
+                        "type": "code_file",
+                        "path": "src/generated.py",
+                        "language": "python",
+                        "change_type": "created",
+                        "content": "def generated():\n    return 'ok'\n",
+                    },
+                    {
+                        "type": "code_patch",
+                        "files_changed": ["src/generated.py"],
+                        "insertions": 2,
+                        "deletions": 0,
+                        "diff": "diff --git a/src/generated.py b/src/generated.py\n",
+                    },
+                ]
+            },
+            "warnings": [],
+            "next_action_hint": "review generated file",
+        }
+
+
 def setup_function() -> None:
     _cleanup_database()
 
@@ -368,6 +396,49 @@ def test_worker_persists_standardized_artifact_for_successful_run() -> None:
         assert artifact.summary["structured_result"]["kind"] == "object"
         assert artifact.structured_output["artifact"].endswith("[summary len=4000]")
         assert artifact.schema_version == "artifact.v1"
+
+
+def test_worker_persists_typed_deliverable_artifacts_for_successful_run() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    role_name = f"{TEST_PREFIX}deliverable-{suffix}"
+    _register_agent(
+        client,
+        role_name=role_name,
+        capabilities=[f"task:{role_name}"],
+        supported_task_types=[role_name],
+    )
+
+    response = client.post("/task-batches", json=_batch_payload(role_name, suffix))
+    assert response.status_code == 201
+    batch_id = response.json()["batch_id"]
+    task_id = response.json()["tasks"][0]["task_id"]
+
+    registry = AgentRegistry()
+    registry.register(role_name, DeliverableAgent())
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        run = run_next_task(session, registry)
+        assert run is not None
+        artifacts = session.query(ArtifactORM).filter(ArtifactORM.run_id == run.id).order_by(ArtifactORM.created_at).all()
+        assert [artifact.artifact_type for artifact in artifacts] == ["json", "code_file", "code_patch"]
+        assert artifacts[1].task_id == task_id
+        assert artifacts[1].uri == "workspace://src/generated.py"
+        assert artifacts[1].raw_content["content"].startswith("def generated")
+        assert artifacts[1].metadata_json["artifact_role"] == "final_deliverable"
+
+    events_response = client.get(f"/tasks/{task_id}/events")
+    assert events_response.status_code == 200
+    finished_event = next(event for event in events_response.json() if event["event_type"] == "execution_run_finished")
+    assert finished_event["payload"]["artifact_type"] == "json"
+    assert finished_event["payload"]["artifact_types"] == ["json", "code_file", "code_patch"]
+    assert finished_event["payload"]["deliverable_count"] == 2
+
+    batch_summary = client.get(f"/task-batches/{batch_id}/summary")
+    assert batch_summary.status_code == 200
+    artifact_types = [artifact["artifact_type"] for artifact in batch_summary.json()["artifacts"]]
+    assert "code_file" in artifact_types
+    assert "code_patch" in artifact_types
 
 
 def test_get_run_returns_saved_execution_run() -> None:

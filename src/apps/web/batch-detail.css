@@ -94,6 +94,9 @@
 .artifact-row,
 .dependency-row,
 .timeline-entry,
+.timeline-empty,
+.timeline-loading,
+.timeline-error,
 .empty-panel {
   padding: 14px;
   border-radius: 16px;
@@ -157,6 +160,25 @@
   gap: 8px;
 }
 
+.timeline-empty,
+.timeline-loading,
+.timeline-error {
+  border: 1px dashed var(--line);
+  color: var(--muted);
+}
+
+.timeline-loading {
+  border-color: rgba(147, 197, 253, 0.34);
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.timeline-error {
+  border-color: rgba(251, 113, 133, 0.34);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .timeline-head {
   display: flex;
   justify-content: space-between;
@@ -195,6 +217,30 @@
   border-radius: 22px;
   background: var(--panel);
   box-shadow: 0 12px 32px rgba(31, 37, 32, 0.06);
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.task-card:hover,
+.task-card:focus-visible {
+  border-color: var(--accent-line);
+  background: rgba(22, 22, 30, 0.9);
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, 0.32),
+    0 0 28px rgba(139, 92, 246, 0.14);
+  outline: none;
+  transform: translateY(-2px);
+}
+
+.task-card.selected {
+  border-color: rgba(167, 139, 250, 0.82);
+  background:
+    linear-gradient(135deg, rgba(139, 92, 246, 0.18), rgba(255, 255, 255, 0.04)),
+    var(--panel);
+  box-shadow:
+    0 22px 70px rgba(0, 0, 0, 0.38),
+    0 0 0 3px rgba(139, 92, 246, 0.18),
+    0 0 34px rgba(139, 92, 246, 0.22);
 }
 
 .task-card.failed {

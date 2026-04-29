@@ -12,6 +12,7 @@ const loading = ref(false);
 const submitting = ref(false);
 const errorMessage = ref("");
 const isDrawerOpen = ref(false);
+const isNavOpen = ref(false);
 const roleSearch = ref("");
 const statusFilter = ref("all");
 
@@ -62,17 +63,74 @@ function roleTaskTypes(agent) {
   return Array.isArray(taskTypes) && taskTypes.length ? taskTypes : ["No explicit task types"];
 }
 
+function inferTaskType(text) {
+  const normalized = text.toLowerCase();
+  const codeKeywords = [
+    "code",
+    "python",
+    "javascript",
+    "typescript",
+    "function",
+    "script",
+    "bug",
+    "test",
+    "refactor",
+    "代码",
+    "函数",
+    "脚本",
+    "实现",
+    "修复",
+    "测试",
+  ];
+  return codeKeywords.some((keyword) => normalized.includes(keyword)) ? "code" : "worker_execute";
+}
+
+function inferLanguage(text) {
+  const normalized = text.toLowerCase();
+  if (normalized.includes("python")) {
+    return "python";
+  }
+  if (normalized.includes("typescript")) {
+    return "typescript";
+  }
+  if (normalized.includes("javascript") || normalized.includes("js")) {
+    return "javascript";
+  }
+  if (normalized.includes("powershell") || normalized.includes("ps1")) {
+    return "powershell";
+  }
+  return "python";
+}
+
+function buildTaskInputPayload(text, normalizedTaskType) {
+  if (normalizedTaskType === "code") {
+    return {
+      prompt: text,
+      language: inferLanguage(text),
+    };
+  }
+  return { text };
+}
+
 function openDrawer() {
   isDrawerOpen.value = true;
+  isNavOpen.value = false;
 }
 
 function closeDrawer() {
   isDrawerOpen.value = false;
 }
 
+function toggleNav() {
+  isNavOpen.value = !isNavOpen.value;
+}
+
 function handleKeydown(event) {
   if (event.key === "Escape" && isDrawerOpen.value) {
     closeDrawer();
+  }
+  if (event.key === "Escape" && isNavOpen.value) {
+    isNavOpen.value = false;
   }
 }
 
@@ -95,7 +153,7 @@ function buildTaskSubmitPayload(rawText, normalizedTaskType) {
       description: text,
       task_type: normalizedTaskType,
       priority: "medium",
-      input_payload: { text },
+      input_payload: buildTaskInputPayload(text, normalizedTaskType),
       expected_output_schema: { type: "object" },
       dependency_client_task_ids: [],
     })),
@@ -110,7 +168,7 @@ async function submitTaskBatch() {
     return;
   }
 
-  const normalizedTaskType = taskType.value.trim() || "planner_preprocess";
+  const normalizedTaskType = taskType.value.trim() || inferTaskType(rawText);
   submitting.value = true;
   submitMessage.value = "Submitting task batch...";
   submittedBatchId.value = "";
@@ -186,6 +244,25 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="registry-shell">
+    <nav class="side-nav" :class="{ expanded: isNavOpen }" aria-label="Console navigation">
+      <button
+        class="side-nav-toggle"
+        type="button"
+        :aria-expanded="isNavOpen"
+        aria-controls="console-nav-list"
+        @click="toggleNav"
+      >
+        <span class="toggle-mark"></span>
+        <span>Console</span>
+      </button>
+      <Transition name="nav-reveal">
+        <div v-if="isNavOpen" id="console-nav-list" class="side-nav-list">
+          <a class="side-nav-item" href="/console/batches">Batch Console</a>
+          <button class="side-nav-item" type="button" @click="openDrawer">Open Agent Roles</button>
+        </div>
+      </Transition>
+    </nav>
+
     <section class="hero-panel">
       <div class="hero-orb hero-orb-one"></div>
       <div class="hero-orb hero-orb-two"></div>
@@ -195,10 +272,6 @@ onBeforeUnmount(() => {
         <p class="subtitle">
           A black-purple command surface for routing visibility, role readiness, and agent lifecycle inspection.
         </p>
-      </div>
-      <div class="hero-actions">
-        <a class="ghost-link" href="/console/batches">Batch Console</a>
-        <button class="primary-button" type="button" @click="openDrawer">Open Agent Roles</button>
       </div>
       <!-- Legacy test markers retained for the pre-upgrade test suite: Agent角色管理 / 角色列表 -->
     </section>
@@ -291,17 +364,6 @@ onBeforeUnmount(() => {
         </div>
         <div v-else class="empty-panel">Enter a task type to inspect matching roles.</div>
       </article>
-    </section>
-
-    <section class="quiet-panel">
-      <div>
-        <p class="section-label">Roles</p>
-        <h2>Execution registry is consolidated</h2>
-        <p>
-          Role cards stay inside a focused control drawer so the dashboard remains clean, dense, and operational.
-        </p>
-      </div>
-      <button class="primary-button compact" type="button" @click="openDrawer">Open Agent Roles</button>
     </section>
 
     <Transition name="fade">
@@ -438,6 +500,128 @@ button:disabled {
     linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
   background-size: 44px 44px;
   mask-image: radial-gradient(circle at 50% 20%, black, transparent 72%);
+}
+
+.side-nav {
+  position: fixed;
+  top: 42px;
+  left: max(16px, calc((100vw - 1180px) / 2 - 86px));
+  z-index: 12;
+  display: grid;
+  gap: 10px;
+  width: 62px;
+  transition: width 180ms ease;
+}
+
+.side-nav.expanded {
+  width: 220px;
+}
+
+.side-nav-toggle,
+.side-nav-list,
+.side-nav-item {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 18, 24, 0.82);
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.side-nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 62px;
+  min-height: 54px;
+  border-radius: 18px;
+  color: #e2e8f0;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  transition: width 180ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.side-nav-toggle span:last-child {
+  display: none;
+}
+
+.side-nav.expanded .side-nav-toggle {
+  justify-content: flex-start;
+  width: 100%;
+  padding: 0 16px;
+}
+
+.side-nav.expanded .side-nav-toggle span:last-child {
+  display: inline;
+}
+
+.toggle-mark {
+  position: relative;
+  width: 18px;
+  height: 14px;
+}
+
+.toggle-mark::before,
+.toggle-mark::after {
+  position: absolute;
+  left: 0;
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: #c4b5fd;
+  content: "";
+  transition: transform 180ms ease, top 180ms ease, box-shadow 180ms ease;
+}
+
+.toggle-mark::before {
+  top: 2px;
+  box-shadow: 0 5px 0 #c4b5fd;
+}
+
+.toggle-mark::after {
+  top: 12px;
+}
+
+.side-nav.expanded .toggle-mark::before {
+  top: 7px;
+  box-shadow: none;
+  transform: rotate(45deg);
+}
+
+.side-nav.expanded .toggle-mark::after {
+  top: 7px;
+  transform: rotate(-45deg);
+}
+
+.side-nav-list {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 20px;
+}
+
+.side-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 44px;
+  width: 100%;
+  border-radius: 14px;
+  color: #e2e8f0;
+  font-weight: 800;
+  text-align: left;
+  text-decoration: none;
+  padding: 0 12px;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.side-nav-toggle:hover,
+.side-nav-item:hover {
+  border-color: rgba(167, 139, 250, 0.62);
+  background: rgba(139, 92, 246, 0.12);
+  box-shadow: 0 0 32px rgba(139, 92, 246, 0.18);
+  transform: translateY(-1px);
 }
 
 .hero-panel,
@@ -1038,13 +1222,22 @@ dd {
 .fade-enter-active,
 .fade-leave-active,
 .slide-enter-active,
-.slide-leave-active {
+.slide-leave-active,
+.nav-reveal-enter-active,
+.nav-reveal-leave-active {
   transition: opacity 180ms ease, transform 220ms ease;
 }
 
 .fade-enter-from,
-.fade-leave-to {
+.fade-leave-to,
+.nav-reveal-enter-from,
+.nav-reveal-leave-to {
   opacity: 0;
+}
+
+.nav-reveal-enter-from,
+.nav-reveal-leave-to {
+  transform: translateX(-10px) scale(0.96);
 }
 
 .slide-enter-from,
@@ -1070,8 +1263,9 @@ dd {
     grid-template-columns: 1fr;
   }
 
-  .hero-actions {
-    justify-content: flex-start;
+  .side-nav {
+    top: 14px;
+    left: 10px;
   }
 
   .metrics {
@@ -1082,7 +1276,7 @@ dd {
 @media (max-width: 720px) {
   .registry-shell {
     width: min(100% - 20px, 1180px);
-    padding-top: 18px;
+    padding-top: 82px;
   }
 
   .command-bar,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -34,6 +35,8 @@ app.include_router(reviews_router)
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 VUE_DIST_DIR = WEB_DIR / "dist"
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/javascript", ".mjs")
 app.mount("/console/assets", StaticFiles(directory=WEB_DIR), name="console-assets")
 if VUE_DIST_DIR.exists():
     app.mount("/console/vue", StaticFiles(directory=VUE_DIST_DIR), name="console-vue")

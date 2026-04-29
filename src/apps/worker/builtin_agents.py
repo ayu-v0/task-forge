@@ -225,8 +225,9 @@ class ReviewerWorkerAgent:
         http_result = run_model_agent_if_enabled("reviewer_agent", task, context)
         if http_result is not None:
             return http_result
-        raw = task.input_payload.get("raw_output")
+        raw = task.input_payload.get("raw_output", task.input_payload.get("structured_output"))
         review_target = _review_target(raw)
+        reviewed_output = raw if isinstance(raw, dict) else review_target
         validation_passed = bool(review_target) or bool(task.input_payload.get("allow_empty"))
         needs_manual_review = bool(task.input_payload.get("force_manual_review")) or not validation_passed
         notes = (
@@ -241,6 +242,7 @@ class ReviewerWorkerAgent:
             "needs_manual_review": needs_manual_review,
             "notes": notes,
             "review_target": review_target,
+            "reviewed_output": reviewed_output,
             "context": _serialize_context(context),
         }
         return _structured_output(

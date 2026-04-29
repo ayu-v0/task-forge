@@ -22,6 +22,10 @@ function Resolve-PythonCommand {
     if (Test-Path $venvPython) {
         return $venvPython
     }
+    $legacyVenvPython = Join-Path $ProjectRoot "venv\Scripts\python.exe"
+    if (Test-Path $legacyVenvPython) {
+        return $legacyVenvPython
+    }
     return "python"
 }
 
@@ -51,12 +55,33 @@ function Resolve-ApiPort {
 }
 
 function Resolve-DatabaseUrl {
-    $script = "from src.packages.core.db.config import get_database_url; print(get_database_url())"
-    $databaseUrl = & $Python -c $script
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($databaseUrl)) {
-        throw "Unable to resolve database URL."
+    if (-not [string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
+        return $env:DATABASE_URL.Trim()
     }
-    return $databaseUrl.Trim()
+
+    $envPath = Join-Path $ProjectRoot ".env"
+    if (Test-Path $envPath) {
+        foreach ($line in Get-Content -Path $envPath -Encoding UTF8) {
+            $trimmed = $line.Trim()
+            if ($trimmed.StartsWith("#") -or -not $trimmed.Contains("=")) {
+                continue
+            }
+            $parts = $trimmed.Split("=", 2)
+            if ($parts[0].Trim() -eq "DATABASE_URL") {
+                return $parts[1].Trim().Trim('"').Trim("'")
+            }
+        }
+    }
+
+    $configPath = Join-Path $ProjectRoot "task_forge_config.json"
+    if (Test-Path $configPath) {
+        $config = Get-Content -Raw -Encoding UTF8 -Path $configPath | ConvertFrom-Json
+        if ($null -ne $config.database -and -not [string]::IsNullOrWhiteSpace($config.database.url)) {
+            return $config.database.url.Trim()
+        }
+    }
+
+    return "sqlite:///data/task_forge.sqlite3"
 }
 
 function Start-BackgroundProcess {
