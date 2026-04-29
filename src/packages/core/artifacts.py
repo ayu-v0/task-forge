@@ -30,6 +30,8 @@ LANGUAGE_CONTENT_TYPES = {
     "ps1": "text/x-powershell",
     "shell": "text/x-shellscript",
     "sh": "text/x-shellscript",
+    "go": "text/x-go",
+    "golang": "text/x-go",
 }
 
 EXTENSION_LANGUAGES = {
@@ -44,6 +46,7 @@ EXTENSION_LANGUAGES = {
     ".yml": "yaml",
     ".ps1": "powershell",
     ".sh": "shell",
+    ".go": "go",
 }
 
 LANGUAGE_EXTENSIONS = {
@@ -64,6 +67,8 @@ LANGUAGE_EXTENSIONS = {
     "ps1": ".ps1",
     "shell": ".sh",
     "sh": ".sh",
+    "go": ".go",
+    "golang": ".go",
 }
 
 
@@ -366,16 +371,34 @@ def build_deliverable_artifact_payloads(
     return payloads
 
 
+def _find_legacy_code_result(value: dict[str, Any], depth: int = 0) -> dict[str, Any] | None:
+    code = value.get("code")
+    if isinstance(code, str) and code.strip():
+        return value
+    if depth >= 3:
+        return None
+    for nested_key in ("result", "output", "artifact"):
+        nested = value.get(nested_key)
+        if isinstance(nested, dict):
+            found = _find_legacy_code_result(nested, depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
 def _infer_legacy_code_deliverables(task_id: str, output_snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     result = output_snapshot.get("result")
     if not isinstance(result, dict):
         return []
-    code = result.get("code")
+    code_result = _find_legacy_code_result(result)
+    if code_result is None:
+        return []
+    code = code_result.get("code")
     if not isinstance(code, str) or not code.strip():
         return []
 
-    language = str(result.get("language") or output_snapshot.get("language") or "text").strip().lower()
-    explicit_path = result.get("path") or result.get("file_path") or result.get("filename")
+    language = str(code_result.get("language") or output_snapshot.get("language") or "text").strip().lower()
+    explicit_path = code_result.get("path") or code_result.get("file_path") or code_result.get("filename")
     if isinstance(explicit_path, str) and _is_safe_relative_path(explicit_path):
         path = _normalize_path(explicit_path)
     else:

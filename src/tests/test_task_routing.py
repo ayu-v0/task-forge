@@ -248,7 +248,7 @@ def test_routes_builtin_search_and_code_roles_by_capability() -> None:
     assert code_response.status_code == 201
     code_tasks = code_response.json()["tasks"]
     assert all(task["assigned_agent_role"] == "code_agent" for task in code_tasks)
-    assert all("via capability,schema" in task["routing_reason"] for task in code_tasks)
+    assert all("via task_type,capability,schema" in task["routing_reason"] for task in code_tasks)
 
 
 def test_prefers_higher_success_rate_when_multiple_roles_match_same_task() -> None:

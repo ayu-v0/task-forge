@@ -51,6 +51,109 @@ function previewText(value, limit = 1200) {
   return text.length <= limit ? text : `${text.slice(0, limit)}...`;
 }
 
+function lineCount(value) {
+  const text = String(value ?? "");
+  return text ? text.split(/\r?\n/).length : 0;
+}
+
+function generatedPathForLanguage(taskId, language) {
+  const extensions = {
+    python: ".py",
+    py: ".py",
+    javascript: ".js",
+    js: ".js",
+    typescript: ".ts",
+    ts: ".ts",
+    go: ".go",
+    golang: ".go",
+    powershell: ".ps1",
+    ps1: ".ps1",
+    shell: ".sh",
+    sh: ".sh",
+  };
+  const normalizedLanguage = String(language || "text").trim().toLowerCase();
+  return `generated/${taskId || "task"}${extensions[normalizedLanguage] || ".txt"}`;
+}
+
+function contentTypeForLanguage(language) {
+  const contentTypes = {
+    python: "text/x-python",
+    py: "text/x-python",
+    javascript: "text/javascript",
+    js: "text/javascript",
+    typescript: "text/typescript",
+    ts: "text/typescript",
+    go: "text/x-go",
+    golang: "text/x-go",
+    powershell: "text/x-powershell",
+    ps1: "text/x-powershell",
+    shell: "text/x-shellscript",
+    sh: "text/x-shellscript",
+  };
+  return contentTypes[String(language || "").trim().toLowerCase()] || "text/plain";
+}
+
+function findLegacyCodeResult(value, depth = 0) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  if (typeof value.code === "string" && value.code.trim()) {
+    return value;
+  }
+  if (depth >= 3) {
+    return null;
+  }
+  for (const key of ["result", "output", "artifact"]) {
+    const found = findLegacyCodeResult(value[key], depth + 1);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+function inferCodeArtifactsFromJsonArtifacts(artifacts) {
+  return artifacts
+    .filter((artifact) => artifact.artifact_type === "json")
+    .map((artifact) => {
+      const codeResult = findLegacyCodeResult(artifact.raw_content || artifact.structured_output || {});
+      if (!codeResult) {
+        return null;
+      }
+      const language = String(codeResult.language || "text").trim().toLowerCase() || "text";
+      const path = String(
+        codeResult.path ||
+        codeResult.file_path ||
+        codeResult.filename ||
+        generatedPathForLanguage(artifact.task_id, language),
+      ).replaceAll("\\", "/");
+      const content = codeResult.code;
+      return {
+        ...artifact,
+        artifact_id: `${artifact.artifact_id || artifact.run_id || "artifact"}:inferred-code-file`,
+        artifact_type: "code_file",
+        uri: `workspace://${path}`,
+        content_type: contentTypeForLanguage(language),
+        raw_content: { path, content },
+        summary: { path, language, change_type: "generated" },
+        structured_output: {
+          path,
+          language,
+          change_type: "generated",
+          line_count: lineCount(content),
+          content_preview: previewText(content),
+          inferred_from: artifact.artifact_id,
+        },
+        metadata: {
+          ...(artifact.metadata || {}),
+          artifact_role: "final_deliverable",
+          inferred_from_artifact_type: "json",
+        },
+      };
+    })
+    .filter(Boolean);
+}
+
 function selectedTaskLooksLikeCode(task) {
   if (!task) {
     return false;
@@ -401,7 +504,11 @@ function renderArtifacts(summary, taskId) {
     `;
   }
 
-  const hasFileLevelDeliverable = artifacts.some((artifact) => ["code_file", "code_patch"].includes(artifact.artifact_type));
+  const hasStoredFileLevelDeliverable = artifacts.some((artifact) => ["code_file", "code_patch"].includes(artifact.artifact_type));
+  const displayArtifacts = hasStoredFileLevelDeliverable
+    ? artifacts
+    : [...inferCodeArtifactsFromJsonArtifacts(artifacts), ...artifacts];
+  const hasFileLevelDeliverable = displayArtifacts.some((artifact) => ["code_file", "code_patch"].includes(artifact.artifact_type));
   const missingFileDeliverableWarning = selectedTaskLooksLikeCode(task) && !hasFileLevelDeliverable
     ? `
       <article class="detail-state warning">
@@ -409,7 +516,7 @@ function renderArtifacts(summary, taskId) {
       </article>
     `
     : "";
-  const sortedArtifacts = [...artifacts].sort((left, right) => artifactPriority(left) - artifactPriority(right));
+  const sortedArtifacts = [...displayArtifacts].sort((left, right) => artifactPriority(left) - artifactPriority(right));
 
   return `${missingFileDeliverableWarning}${sortedArtifacts.map((artifact) => formatArtifactPreview(artifact)).join("")}`;
 }

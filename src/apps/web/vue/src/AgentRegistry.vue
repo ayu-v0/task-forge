@@ -99,6 +99,9 @@ function inferLanguage(text) {
   if (normalized.includes("powershell") || normalized.includes("ps1")) {
     return "powershell";
   }
+  if (/\b(go|golang)\b/.test(normalized) || normalized.includes("go语言")) {
+    return "go";
+  }
   return "python";
 }
 
