@@ -205,3 +205,33 @@ def test_submit_normalization_does_not_create_cycle_from_inferred_dependency() -
     assert body["normalized_task_count"] == 3
     review_item = next(item for item in body["normalization"] if item["client_task_id"] == "task_3")
     assert review_item["inferred_dependency_client_task_ids"] == ["task_2"]
+
+
+def test_submit_auto_task_type_returns_recognized_code_intent() -> None:
+    payload = _base_payload(
+        [
+            {
+                "client_task_id": "task_1",
+                "title": "Submitted task",
+                "description": "写一个判断字符串是否为空的 Go 代码，以 markdown 给我",
+                "task_type": "auto",
+                "input_payload": {"prompt": "写一个判断字符串是否为空的 Go 代码，以 markdown 给我"},
+            }
+        ]
+    )
+
+    response = client.post("/task-batches", json=payload)
+    assert response.status_code == 201
+    body = response.json()
+
+    normalization = body["normalization"][0]
+    assert normalization["recognized_intent"]["primary_intent"] == "coding"
+    assert normalization["recognized_intent"]["task_type"] == "code"
+    assert normalization["recognized_intent"]["language"] == "go"
+    assert normalization["recognized_intent"]["deliverable_contract"]["expected_artifact_types"] == ["document"]
+    assert any("task_type normalized from auto to code" in note for note in normalization["notes"])
+
+    summary_response = client.get(f"/task-batches/{body['batch_id']}/summary")
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert summary["tasks"][0]["task_type"] == "code"

@@ -63,28 +63,6 @@ function roleTaskTypes(agent) {
   return Array.isArray(taskTypes) && taskTypes.length ? taskTypes : ["No explicit task types"];
 }
 
-function inferTaskType(text) {
-  const normalized = text.toLowerCase();
-  const codeKeywords = [
-    "code",
-    "python",
-    "javascript",
-    "typescript",
-    "function",
-    "script",
-    "bug",
-    "test",
-    "refactor",
-    "代码",
-    "函数",
-    "脚本",
-    "实现",
-    "修复",
-    "测试",
-  ];
-  return codeKeywords.some((keyword) => normalized.includes(keyword)) ? "code" : "worker_execute";
-}
-
 function inferLanguage(text) {
   const normalized = text.toLowerCase();
   if (normalized.includes("python")) {
@@ -106,13 +84,14 @@ function inferLanguage(text) {
 }
 
 function buildTaskInputPayload(text, normalizedTaskType) {
+  const payload = {
+    prompt: text,
+    text,
+  };
   if (normalizedTaskType === "code") {
-    return {
-      prompt: text,
-      language: inferLanguage(text),
-    };
+    payload.language = inferLanguage(text);
   }
-  return { text };
+  return payload;
 }
 
 function openDrawer() {
@@ -171,7 +150,7 @@ async function submitTaskBatch() {
     return;
   }
 
-  const normalizedTaskType = taskType.value.trim() || inferTaskType(rawText);
+  const normalizedTaskType = taskType.value.trim() || "auto";
   submitting.value = true;
   submitMessage.value = "Submitting task batch...";
   submittedBatchId.value = "";
@@ -190,7 +169,7 @@ async function submitTaskBatch() {
     const payload = await response.json();
     submittedBatchId.value = payload.batch_id;
     submitMessage.value = `Submitted ${payload.normalized_task_count} task(s) as a new batch.`;
-    taskType.value = normalizedTaskType;
+    taskType.value = taskType.value.trim();
     await loadRegistry();
   } catch (error) {
     submitMessage.value = error.message || "Unable to submit task batch.";

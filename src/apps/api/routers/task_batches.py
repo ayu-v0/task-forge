@@ -42,6 +42,7 @@ from src.packages.core.task_batch_normalization import normalize_batch_tasks
 from src.packages.core.timeline import load_batch_timeline
 from src.packages.core.task_state_machine import transition_task_status
 from src.packages.router import RoleRoutingStats, route_task
+from src.apps.api.intent_recognition import recognize_intent_for_task
 
 router = APIRouter(prefix="/task-batches", tags=["task-batches"])
 
@@ -314,7 +315,8 @@ def create_task_batch(
     db: Session = Depends(get_db),
 ) -> TaskBatchSubmitResponse:
     normalized_tasks, normalization_items = normalize_batch_tasks(
-        [task.model_dump() for task in payload.tasks]
+        [task.model_dump() for task in payload.tasks],
+        intent_recognizer=recognize_intent_for_task,
     )
     normalized_payload = payload.model_copy(
         update={
@@ -476,6 +478,7 @@ def create_task_batch(
                     missing_fields_filled=item.missing_fields_filled,
                     inferred_dependency_client_task_ids=item.inferred_dependency_client_task_ids,
                     notes=item.notes,
+                    recognized_intent=item.recognized_intent,
                 )
                 for item in normalization_items
             ],

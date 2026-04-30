@@ -111,6 +111,7 @@ class TaskNormalizationRead(SchemaModel):
     missing_fields_filled: list[str] = Field(default_factory=list)
     inferred_dependency_client_task_ids: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    recognized_intent: dict[str, Any] | None = None
 
 
 class TaskBatchSubmitResponse(SchemaModel):

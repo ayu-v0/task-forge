@@ -4,7 +4,13 @@ from dataclasses import dataclass
 
 from src.packages.core.db.models import AgentRoleORM, TaskORM
 
-ROUTING_META_INPUT_KEYS = {"cost_hint", "timeout_seconds"}
+ROUTING_META_INPUT_KEYS = {
+    "cost_hint",
+    "timeout_seconds",
+    "intent",
+    "deliverable_contract",
+    "routing_hints",
+}
 
 
 @dataclass(frozen=True)

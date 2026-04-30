@@ -344,8 +344,7 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert 'aria-controls="console-nav-list"' in component_source
     assert "keydown" in component_source
     assert "statusFilter" in component_source
-    assert "inferTaskType" in component_source
-    assert 'return codeKeywords.some((keyword) => normalized.includes(keyword)) ? "code" : "worker_execute";' in component_source
+    assert 'taskType.value.trim() || "auto"' in component_source
     assert "buildTaskInputPayload" in component_source
     assert 'prompt: text' in component_source
     assert "Success rate" in component_source
@@ -378,13 +377,13 @@ def test_agent_registry_built_css_does_not_disable_body_interaction() -> None:
     assert "body{margin:0" in built_css
 
 
-def test_agent_registry_built_js_infers_code_task_type_for_submission() -> None:
+def test_agent_registry_built_js_submits_auto_task_type_by_default() -> None:
     js_assets = list((ROOT / "src" / "apps" / "web" / "dist" / "assets").glob("*.js"))
     assert js_assets
 
     built_js = "\n".join(path.read_text(encoding="utf-8") for path in js_assets)
-    assert "inferTaskType" in built_js or "worker_execute" in built_js
-    assert "codeKeywords" in built_js or "python" in built_js
+    assert '||"auto"' in built_js or '|| "auto"' in built_js
     assert "prompt:" in built_js
+    assert "text:" in built_js
     assert '||"planner_preprocess"' not in built_js
     assert '|| "planner_preprocess"' not in built_js

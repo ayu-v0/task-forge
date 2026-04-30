@@ -417,6 +417,7 @@ def mark_run_success(
         task_id=task.id,
         run_id=run.id,
         output_snapshot=result,
+        input_snapshot=run.input_snapshot or task.input_payload,
     )
     artifacts: list[ArtifactORM] = []
     for artifact_payload in artifact_payloads:
