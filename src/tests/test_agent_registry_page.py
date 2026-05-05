@@ -368,6 +368,15 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert "openRolesFromSideMenu" in component_source
     assert "viewAgent(agent)" in component_source
     assert "fetch(`/agents/${encodeURIComponent(requestedAgentId)}`)" in component_source
+    assert "editAgent(agent)" in component_source
+    assert "saveAgentEdit" in component_source
+    assert "method: \"PATCH\"" in component_source
+    assert "role-edit-panel" in component_source
+    assert "Only version, status, timeout, and retry policy can be edited here." in component_source
+    assert "capability_declaration:" not in component_source
+    assert "prompt_budget_policy:" not in component_source
+    assert "input_schema:" not in component_source
+    assert "output_schema:" not in component_source
     assert "retrySelectedAgent" in component_source
     assert "role-detail-panel" in component_source
     assert "detail-card-grid" in component_source

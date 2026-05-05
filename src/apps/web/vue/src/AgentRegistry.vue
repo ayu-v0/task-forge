@@ -18,6 +18,13 @@ const selectedAgentId = ref("");
 const selectedAgentDetail = ref(null);
 const detailLoading = ref(false);
 const detailError = ref("");
+const isRoleEditOpen = ref(false);
+const editingAgentId = ref("");
+const editForm = ref(createEmptyEditForm());
+const editLoading = ref(false);
+const editSaving = ref(false);
+const editError = ref("");
+const editMessage = ref("");
 const roleSearch = ref("");
 const statusFilter = ref("all");
 
@@ -59,6 +66,16 @@ const promptBudgetHighlights = [
   ["Task input", "max_task_input_tokens"],
 ];
 
+function createEmptyEditForm() {
+  return {
+    roleName: "",
+    enabled: true,
+    version: "",
+    timeoutSeconds: 300,
+    maxRetries: 0,
+  };
+}
+
 function formatPercent(value) {
   if (value === null || value === undefined) {
     return "No run history";
@@ -82,6 +99,7 @@ function openDrawer() {
 function closeDrawer() {
   isDrawerOpen.value = false;
   closeRoleDetail();
+  closeRoleEdit();
 }
 
 function toggleSideMenu() {
@@ -105,6 +123,16 @@ function closeRoleDetail() {
   detailError.value = "";
 }
 
+function closeRoleEdit() {
+  isRoleEditOpen.value = false;
+  editingAgentId.value = "";
+  editForm.value = createEmptyEditForm();
+  editLoading.value = false;
+  editSaving.value = false;
+  editError.value = "";
+  editMessage.value = "";
+}
+
 function formatJson(value) {
   return JSON.stringify(value ?? {}, null, 2);
 }
@@ -125,6 +153,16 @@ function retrySelectedAgent() {
     return;
   }
   viewAgent({ id: selectedAgentId.value });
+}
+
+function populateEditForm(agentDetail) {
+  editForm.value = {
+    roleName: agentDetail.role_name || "",
+    enabled: Boolean(agentDetail.enabled),
+    version: agentDetail.version || "",
+    timeoutSeconds: agentDetail.timeout_seconds || 300,
+    maxRetries: agentDetail.max_retries ?? 0,
+  };
 }
 
 async function viewAgent(agent) {
@@ -152,6 +190,86 @@ async function viewAgent(agent) {
     if (selectedAgentId.value === requestedAgentId && isRoleDetailOpen.value) {
       detailLoading.value = false;
     }
+  }
+}
+
+async function editAgent(agent) {
+  const requestedAgentId = agent.id;
+  editingAgentId.value = requestedAgentId;
+  editForm.value = createEmptyEditForm();
+  editLoading.value = true;
+  editSaving.value = false;
+  editError.value = "";
+  editMessage.value = "";
+  isRoleEditOpen.value = true;
+
+  try {
+    const response = await fetch(`/agents/${encodeURIComponent(requestedAgentId)}`);
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`);
+    }
+    const payload = await response.json();
+    if (editingAgentId.value === requestedAgentId && isRoleEditOpen.value) {
+      populateEditForm(payload);
+    }
+  } catch (error) {
+    if (editingAgentId.value === requestedAgentId && isRoleEditOpen.value) {
+      editError.value = error.message || "Unable to load agent role for editing.";
+    }
+  } finally {
+    if (editingAgentId.value === requestedAgentId && isRoleEditOpen.value) {
+      editLoading.value = false;
+    }
+  }
+}
+
+async function saveAgentEdit() {
+  if (!editingAgentId.value) {
+    return;
+  }
+
+  editSaving.value = true;
+  editError.value = "";
+  editMessage.value = "";
+
+  try {
+    const timeoutSeconds = Number(editForm.value.timeoutSeconds);
+    const maxRetries = Number(editForm.value.maxRetries);
+    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+      throw new Error("Timeout seconds must be greater than 0.");
+    }
+    if (!Number.isFinite(maxRetries) || maxRetries < 0) {
+      throw new Error("Max retries must be 0 or greater.");
+    }
+
+    const payload = {
+      timeout_seconds: timeoutSeconds,
+      max_retries: maxRetries,
+      enabled: editForm.value.enabled,
+      version: editForm.value.version,
+    };
+
+    const requestedAgentId = editingAgentId.value;
+    const response = await fetch(`/agents/${encodeURIComponent(requestedAgentId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({}));
+      throw new Error(errorPayload.detail || `Update failed with status ${response.status}`);
+    }
+    const updatedAgent = await response.json();
+    editMessage.value = "Role updated.";
+    populateEditForm(updatedAgent);
+    if (selectedAgentId.value === requestedAgentId && isRoleDetailOpen.value) {
+      selectedAgentDetail.value = updatedAgent;
+    }
+    await loadRegistry();
+  } catch (error) {
+    editError.value = error.message || "Unable to update agent role.";
+  } finally {
+    editSaving.value = false;
   }
 }
 
@@ -539,12 +657,65 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
+        <section v-if="isRoleEditOpen" class="role-edit-panel" aria-live="polite">
+          <header class="role-edit-header">
+            <div>
+              <p class="section-label">Edit role</p>
+              <h3>{{ editForm.roleName || "Loading role" }}</h3>
+              <p class="role-edit-note">Only version, status, timeout, and retry policy can be edited here.</p>
+            </div>
+            <button class="icon-button" type="button" aria-label="Close role editor" @click="closeRoleEdit">x</button>
+          </header>
+
+          <div v-if="editLoading" class="detail-state detail-state-loading">
+            <span class="detail-loading-dot"></span>
+            <p>Loading editable role fields...</p>
+          </div>
+
+          <form v-else class="role-edit-form" @submit.prevent="saveAgentEdit">
+            <p v-if="editError" class="detail-state detail-state-error">{{ editError }}</p>
+            <p v-if="editMessage" class="edit-success-message">{{ editMessage }}</p>
+
+            <div class="edit-form-grid">
+              <label class="field">
+                <span>Version</span>
+                <input v-model="editForm.version" type="text" placeholder="1.0.0">
+              </label>
+
+              <label class="field">
+                <span>Status</span>
+                <select v-model="editForm.enabled">
+                  <option :value="true">Enabled</option>
+                  <option :value="false">Disabled</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Timeout seconds</span>
+                <input v-model.number="editForm.timeoutSeconds" type="number" min="1" step="1">
+              </label>
+
+              <label class="field">
+                <span>Max retries</span>
+                <input v-model.number="editForm.maxRetries" type="number" min="0" step="1">
+              </label>
+            </div>
+
+            <div class="edit-actions">
+              <button class="ghost-button" type="button" :disabled="editSaving" @click="closeRoleEdit">Cancel</button>
+              <button class="primary-button compact" type="submit" :disabled="editSaving">
+                {{ editSaving ? "Saving" : "Save changes" }}
+              </button>
+            </div>
+          </form>
+        </section>
+
         <section class="role-list" aria-live="polite">
           <article
             v-for="agent in filteredAgents"
             :key="agent.id"
             class="role-item"
-            :class="{ selected: isRoleDetailOpen && selectedAgentId === agent.id }"
+            :class="{ selected: (isRoleDetailOpen && selectedAgentId === agent.id) || (isRoleEditOpen && editingAgentId === agent.id) }"
           >
             <div class="role-main">
               <div>
@@ -586,8 +757,19 @@ onBeforeUnmount(() => {
                       : "View"
                 }}
               </button>
-              <button type="button">Edit</button>
-              <button type="button">{{ agent.enabled ? "Disable" : "Enable" }}</button>
+              <button
+                type="button"
+                :disabled="editLoading && editingAgentId === agent.id"
+                @click="editAgent(agent)"
+              >
+                {{
+                  editLoading && editingAgentId === agent.id
+                    ? "Loading"
+                    : editingAgentId === agent.id && isRoleEditOpen
+                      ? "Editing"
+                      : "Edit"
+                }}
+              </button>
             </div>
           </article>
 
@@ -1014,25 +1196,40 @@ h3 {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   width: 100%;
-  height: 46px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
   outline: none;
   background: rgba(0, 0, 0, 0.35);
   color: #f8fafc;
-  padding: 0 14px;
   text-transform: none;
   transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
 }
 
-.field input::placeholder {
+.field input,
+.field select {
+  height: 46px;
+  padding: 0 14px;
+}
+
+.field textarea {
+  min-height: 92px;
+  resize: vertical;
+  padding: 12px 14px;
+  text-transform: none;
+  line-height: 1.5;
+}
+
+.field input::placeholder,
+.field textarea::placeholder {
   color: #64748b;
 }
 
 .field input:focus,
-.field select:focus {
+.field select:focus,
+.field textarea:focus {
   border-color: rgba(139, 92, 246, 0.72);
   background: rgba(0, 0, 0, 0.48);
   box-shadow:
@@ -1282,6 +1479,63 @@ dd {
     radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.18), transparent 42%),
     rgba(255, 255, 255, 0.055);
   padding: 16px;
+}
+
+.role-edit-panel {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+  border: 1px solid rgba(129, 140, 248, 0.34);
+  border-radius: 20px;
+  background:
+    linear-gradient(135deg, rgba(99, 102, 241, 0.14), rgba(255, 255, 255, 0.04)),
+    rgba(255, 255, 255, 0.055);
+  padding: 16px;
+}
+
+.role-edit-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.role-edit-header h3 {
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+
+.role-edit-note {
+  margin: 8px 0 0;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.role-edit-form {
+  display: grid;
+  gap: 14px;
+}
+
+.edit-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.edit-success-message {
+  margin: 0;
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  border-radius: 14px;
+  background: rgba(34, 197, 94, 0.08);
+  color: #bbf7d0;
+  padding: 12px;
+}
+
+.edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .role-detail-hero {
@@ -1588,7 +1842,8 @@ dd {
   .task-submit-panel,
   .detail-card-grid,
   .drawer-tools,
-  .role-metrics {
+  .role-metrics,
+  .edit-form-grid {
     grid-template-columns: 1fr;
   }
 
