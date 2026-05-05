@@ -277,6 +277,14 @@ function handleKeydown(event) {
   if (event.key !== "Escape") {
     return;
   }
+  if (isRoleDetailOpen.value) {
+    closeRoleDetail();
+    return;
+  }
+  if (isRoleEditOpen.value) {
+    closeRoleEdit();
+    return;
+  }
   if (isDrawerOpen.value) {
     closeDrawer();
     return;
@@ -551,7 +559,84 @@ onBeforeUnmount(() => {
           </label>
         </div>
 
-        <section v-if="isRoleDetailOpen" class="role-detail-panel" aria-live="polite">
+        <section class="role-list" aria-live="polite">
+          <article
+            v-for="agent in filteredAgents"
+            :key="agent.id"
+            class="role-item"
+            :class="{ selected: (isRoleDetailOpen && selectedAgentId === agent.id) || (isRoleEditOpen && editingAgentId === agent.id) }"
+          >
+            <div class="role-main">
+              <div>
+                <h3>{{ agent.role_name }}</h3>
+                <p>{{ agent.description || "No description" }}</p>
+              </div>
+              <div class="role-state">
+                <span class="status-badge" :class="agent.enabled ? 'enabled' : 'disabled'">
+                  {{ agent.enabled ? "Enabled" : "Disabled" }}
+                </span>
+                <span class="version-pill">v{{ agent.version }}</span>
+              </div>
+            </div>
+
+            <div class="pill-row">
+              <span v-for="taskTypeName in roleTaskTypes(agent)" :key="taskTypeName" class="meta-pill">
+                {{ taskTypeName }}
+              </span>
+            </div>
+
+            <dl class="role-metrics">
+              <div><dt>Success rate</dt><dd>{{ formatPercent(agent.success_rate) }}</dd></div>
+              <div><dt>Avg latency</dt><dd>{{ agent.average_latency_ms ?? "n/a" }} ms</dd></div>
+              <div><dt>Total cost estimate</dt><dd>{{ formatCurrency(agent.total_cost_estimate) }}</dd></div>
+            </dl>
+
+            <div class="role-actions">
+              <button
+                class="drawer-primary"
+                type="button"
+                :disabled="detailLoading && selectedAgentId === agent.id"
+                @click="viewAgent(agent)"
+              >
+                {{
+                  detailLoading && selectedAgentId === agent.id
+                    ? "Loading"
+                    : selectedAgentId === agent.id
+                      ? "Viewing"
+                      : "View"
+                }}
+              </button>
+              <button
+                type="button"
+                :disabled="editLoading && editingAgentId === agent.id"
+                @click="editAgent(agent)"
+              >
+                {{
+                  editLoading && editingAgentId === agent.id
+                    ? "Loading"
+                    : editingAgentId === agent.id && isRoleEditOpen
+                      ? "Editing"
+                      : "Edit"
+                }}
+              </button>
+            </div>
+          </article>
+
+          <article v-if="!filteredAgents.length" class="drawer-empty">
+            No matching agent roles.
+          </article>
+        </section>
+      </aside>
+    </Transition>
+
+    <Transition name="slide">
+      <aside
+        v-if="isRoleDetailOpen || isRoleEditOpen"
+        class="role-side-panel"
+        aria-label="Role detail panel"
+        aria-live="polite"
+      >
+        <section v-if="isRoleDetailOpen" class="role-detail-panel">
           <header class="role-detail-hero">
             <div class="role-detail-title">
               <p class="section-label">Role detail</p>
@@ -657,7 +742,7 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section v-if="isRoleEditOpen" class="role-edit-panel" aria-live="polite">
+        <section v-if="isRoleEditOpen" class="role-edit-panel">
           <header class="role-edit-header">
             <div>
               <p class="section-label">Edit role</p>
@@ -708,74 +793,6 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </form>
-        </section>
-
-        <section class="role-list" aria-live="polite">
-          <article
-            v-for="agent in filteredAgents"
-            :key="agent.id"
-            class="role-item"
-            :class="{ selected: (isRoleDetailOpen && selectedAgentId === agent.id) || (isRoleEditOpen && editingAgentId === agent.id) }"
-          >
-            <div class="role-main">
-              <div>
-                <h3>{{ agent.role_name }}</h3>
-                <p>{{ agent.description || "No description" }}</p>
-              </div>
-              <div class="role-state">
-                <span class="status-badge" :class="agent.enabled ? 'enabled' : 'disabled'">
-                  {{ agent.enabled ? "Enabled" : "Disabled" }}
-                </span>
-                <span class="version-pill">v{{ agent.version }}</span>
-              </div>
-            </div>
-
-            <div class="pill-row">
-              <span v-for="taskTypeName in roleTaskTypes(agent)" :key="taskTypeName" class="meta-pill">
-                {{ taskTypeName }}
-              </span>
-            </div>
-
-            <dl class="role-metrics">
-              <div><dt>Success rate</dt><dd>{{ formatPercent(agent.success_rate) }}</dd></div>
-              <div><dt>Avg latency</dt><dd>{{ agent.average_latency_ms ?? "n/a" }} ms</dd></div>
-              <div><dt>Total cost estimate</dt><dd>{{ formatCurrency(agent.total_cost_estimate) }}</dd></div>
-            </dl>
-
-            <div class="role-actions">
-              <button
-                class="drawer-primary"
-                type="button"
-                :disabled="detailLoading && selectedAgentId === agent.id"
-                @click="viewAgent(agent)"
-              >
-                {{
-                  detailLoading && selectedAgentId === agent.id
-                    ? "Loading"
-                    : selectedAgentId === agent.id
-                      ? "Viewing"
-                      : "View"
-                }}
-              </button>
-              <button
-                type="button"
-                :disabled="editLoading && editingAgentId === agent.id"
-                @click="editAgent(agent)"
-              >
-                {{
-                  editLoading && editingAgentId === agent.id
-                    ? "Loading"
-                    : editingAgentId === agent.id && isRoleEditOpen
-                      ? "Editing"
-                      : "Edit"
-                }}
-              </button>
-            </div>
-          </article>
-
-          <article v-if="!filteredAgents.length" class="drawer-empty">
-            No matching agent roles.
-          </article>
         </section>
       </aside>
     </Transition>
@@ -858,6 +875,7 @@ button:disabled {
 .command-bar,
 .panel,
 .role-drawer,
+.role-side-panel,
 .console-side-nav {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(18, 18, 24, 0.82);
@@ -1447,6 +1465,26 @@ dd {
     inset 1px 0 0 rgba(255, 255, 255, 0.06);
 }
 
+.role-side-panel {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 40;
+  width: min(760px, calc(100vw - 32px));
+  overflow-y: auto;
+  border-color: rgba(167, 139, 250, 0.34);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 32% 0%, rgba(139, 92, 246, 0.2), transparent 38%),
+    rgba(12, 12, 18, 0.96);
+  box-shadow:
+    -28px 0 90px rgba(0, 0, 0, 0.56),
+    0 0 44px rgba(139, 92, 246, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  padding: 18px;
+}
+
 .drawer-header,
 .role-main {
   display: flex;
@@ -1479,6 +1517,11 @@ dd {
     radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.18), transparent 42%),
     rgba(255, 255, 255, 0.055);
   padding: 16px;
+}
+
+.role-side-panel .role-detail-panel,
+.role-side-panel .role-edit-panel {
+  margin-top: 0;
 }
 
 .role-edit-panel {
@@ -1866,6 +1909,12 @@ dd {
   }
 
   .role-drawer {
+    width: 100vw;
+    border-radius: 0;
+  }
+
+  .role-side-panel {
+    inset: 0;
     width: 100vw;
     border-radius: 0;
   }

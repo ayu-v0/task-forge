@@ -34,6 +34,9 @@ def _convert_array_column_to_json(table_name: str, column_name: str) -> None:
     if not _is_postgresql_array(table_name, column_name):
         return
 
+    op.execute(
+        sa.text(f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" DROP DEFAULT')
+    )
     op.alter_column(
         table_name,
         column_name,
