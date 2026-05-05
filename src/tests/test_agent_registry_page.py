@@ -363,6 +363,15 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert "角色列表" in component_source
     assert "openDrawer" in component_source
     assert "closeDrawer" in component_source
+    assert "isSideMenuOpen" in component_source
+    assert "toggleSideMenu" in component_source
+    assert "openRolesFromSideMenu" in component_source
+    assert "console-side-nav" in component_source
+    assert "Console navigation" in component_source
+    assert "Expand console menu" in component_source
+    assert "Batch Console" in component_source
+    assert component_source.count("Open Agent Roles") == 1
+    assert "hero-actions" not in component_source
     assert "keydown" in component_source
     assert "statusFilter" in component_source
     assert "Success rate" in component_source
@@ -377,7 +386,8 @@ def test_agent_registry_vue_source_uses_premium_black_purple_theme() -> None:
     component_source = component_path.read_text(encoding="utf-8")
 
     assert "<style scoped>" in component_source
-    assert "Open Agent Roles" in component_source
+    assert "side-nav-toggle" in component_source
+    assert "side-nav-item" in component_source
     assert "Role List" in component_source
     assert "#6366f1" in component_source
     assert "#8b5cf6" in component_source

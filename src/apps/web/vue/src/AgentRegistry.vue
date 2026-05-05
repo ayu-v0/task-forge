@@ -12,6 +12,7 @@ const loading = ref(false);
 const submitting = ref(false);
 const errorMessage = ref("");
 const isDrawerOpen = ref(false);
+const isSideMenuOpen = ref(false);
 const roleSearch = ref("");
 const statusFilter = ref("all");
 
@@ -70,9 +71,29 @@ function closeDrawer() {
   isDrawerOpen.value = false;
 }
 
+function toggleSideMenu() {
+  isSideMenuOpen.value = !isSideMenuOpen.value;
+}
+
+function closeSideMenu() {
+  isSideMenuOpen.value = false;
+}
+
+function openRolesFromSideMenu() {
+  openDrawer();
+  closeSideMenu();
+}
+
 function handleKeydown(event) {
-  if (event.key === "Escape" && isDrawerOpen.value) {
+  if (event.key !== "Escape") {
+    return;
+  }
+  if (isDrawerOpen.value) {
     closeDrawer();
+    return;
+  }
+  if (isSideMenuOpen.value) {
+    closeSideMenu();
   }
 }
 
@@ -185,7 +206,24 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="registry-shell">
+  <main class="registry-shell" :class="{ 'side-menu-expanded': isSideMenuOpen }">
+    <nav class="console-side-nav" :class="{ expanded: isSideMenuOpen }" aria-label="Console navigation">
+      <button
+        class="side-nav-toggle"
+        type="button"
+        aria-controls="console-side-nav-list"
+        :aria-expanded="isSideMenuOpen"
+        :aria-label="isSideMenuOpen ? 'Collapse console menu' : 'Expand console menu'"
+        @click="toggleSideMenu"
+      >
+        Menu
+      </button>
+      <div v-if="isSideMenuOpen" id="console-side-nav-list" class="side-nav-list">
+        <a class="side-nav-item" href="/console/batches">Batch Console</a>
+        <button class="side-nav-item" type="button" @click="openRolesFromSideMenu">Open Agent Roles</button>
+      </div>
+    </nav>
+
     <section class="hero-panel">
       <div class="hero-orb hero-orb-one"></div>
       <div class="hero-orb hero-orb-two"></div>
@@ -195,10 +233,6 @@ onBeforeUnmount(() => {
         <p class="subtitle">
           A black-purple command surface for routing visibility, role readiness, and agent lifecycle inspection.
         </p>
-      </div>
-      <div class="hero-actions">
-        <a class="ghost-link" href="/console/batches">Batch Console</a>
-        <button class="primary-button" type="button" @click="openDrawer">Open Agent Roles</button>
       </div>
       <!-- Legacy test markers retained for the pre-upgrade test suite: Agent角色管理 / 角色列表 -->
     </section>
@@ -291,17 +325,6 @@ onBeforeUnmount(() => {
         </div>
         <div v-else class="empty-panel">Enter a task type to inspect matching roles.</div>
       </article>
-    </section>
-
-    <section class="quiet-panel">
-      <div>
-        <p class="section-label">Roles</p>
-        <h2>Execution registry is consolidated</h2>
-        <p>
-          Role cards stay inside a focused control drawer so the dashboard remains clean, dense, and operational.
-        </p>
-      </div>
-      <button class="primary-button compact" type="button" @click="openDrawer">Open Agent Roles</button>
     </section>
 
     <Transition name="fade">
@@ -422,9 +445,22 @@ button:disabled {
 .registry-shell {
   position: relative;
   isolation: isolate;
-  width: min(1180px, calc(100% - 32px));
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 16px;
+  width: min(1280px, calc(100% - 32px));
   margin: 0 auto;
   padding: 42px 0 64px;
+  transition: grid-template-columns 180ms ease;
+}
+
+.registry-shell.side-menu-expanded {
+  grid-template-columns: 224px minmax(0, 1fr);
+}
+
+.registry-shell > :not(.console-side-nav) {
+  grid-column: 2;
+  min-width: 0;
 }
 
 .registry-shell::before {
@@ -444,8 +480,8 @@ button:disabled {
 .task-submit-panel,
 .command-bar,
 .panel,
-.quiet-panel,
-.role-drawer {
+.role-drawer,
+.console-side-nav {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(18, 18, 24, 0.82);
   backdrop-filter: blur(18px);
@@ -457,7 +493,7 @@ button:disabled {
 .hero-panel {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 24px;
   align-items: end;
   min-height: 330px;
@@ -503,8 +539,7 @@ button:disabled {
   background: radial-gradient(circle, rgba(99, 102, 241, 0.34), transparent 70%);
 }
 
-.hero-copy,
-.hero-actions {
+.hero-copy {
   position: relative;
   z-index: 1;
 }
@@ -557,7 +592,6 @@ h3 {
 }
 
 .subtitle,
-.quiet-panel p,
 .role-item p,
 .muted,
 .empty-panel,
@@ -573,7 +607,6 @@ h3 {
   line-height: 1.75;
 }
 
-.hero-actions,
 .role-actions,
 .pill-row {
   display: flex;
@@ -585,7 +618,9 @@ h3 {
 .ghost-button,
 .ghost-link,
 .role-actions button,
-.icon-button {
+.icon-button,
+.side-nav-toggle,
+.side-nav-item {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -618,7 +653,9 @@ h3 {
 .ghost-button,
 .ghost-link,
 .role-actions button,
-.icon-button {
+.icon-button,
+.side-nav-toggle,
+.side-nav-item {
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.035);
   color: #e2e8f0;
@@ -633,10 +670,71 @@ h3 {
 .ghost-button:hover,
 .ghost-link:hover,
 .role-actions button:hover,
-.icon-button:hover {
+.icon-button:hover,
+.side-nav-toggle:hover,
+.side-nav-item:hover {
   border-color: rgba(167, 139, 250, 0.62);
   box-shadow: 0 0 32px rgba(139, 92, 246, 0.18);
   transform: translateY(-1px);
+}
+
+.side-nav-toggle:focus-visible,
+.side-nav-item:focus-visible {
+  outline: 2px solid rgba(196, 181, 253, 0.86);
+  outline-offset: 3px;
+}
+
+.console-side-nav {
+  position: sticky;
+  top: 42px;
+  z-index: 10;
+  align-self: start;
+  display: grid;
+  gap: 12px;
+  min-height: 64px;
+  padding: 8px;
+  overflow: hidden;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.2), transparent 44%),
+    rgba(18, 18, 24, 0.84);
+}
+
+.console-side-nav.expanded {
+  border-color: rgba(139, 92, 246, 0.36);
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.45),
+    0 0 32px rgba(139, 92, 246, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.side-nav-toggle {
+  width: 48px;
+  min-height: 48px;
+  padding: 0;
+  color: #f8fafc;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.side-nav-list {
+  display: grid;
+  gap: 10px;
+}
+
+.side-nav-item {
+  width: 100%;
+  min-height: 44px;
+  justify-content: flex-start;
+  border-radius: 12px;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+  font-weight: 800;
+  text-align: left;
+}
+
+.side-nav-item:is(button) {
+  text-align: left;
 }
 
 .task-submit-panel {
@@ -782,15 +880,13 @@ h3 {
   gap: 16px;
 }
 
-.panel,
-.quiet-panel {
+.panel {
   border-radius: 24px;
   padding: 22px;
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
-.panel:hover,
-.quiet-panel:hover {
+.panel:hover {
   border-color: rgba(139, 92, 246, 0.45);
   box-shadow:
     0 24px 80px rgba(0, 0, 0, 0.45),
@@ -927,14 +1023,6 @@ dd {
   color: #ddd6fe;
 }
 
-.quiet-panel {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
-  align-items: center;
-  margin-top: 16px;
-}
-
 .drawer-overlay {
   position: fixed;
   inset: 0;
@@ -1065,13 +1153,26 @@ dd {
 }
 
 @media (max-width: 960px) {
-  .hero-panel,
-  .overview-grid {
-    grid-template-columns: 1fr;
+  .registry-shell,
+  .registry-shell.side-menu-expanded {
+    display: block;
+    width: min(100% - 20px, 1180px);
+    padding-top: 82px;
   }
 
-  .hero-actions {
-    justify-content: flex-start;
+  .console-side-nav {
+    position: fixed;
+    top: 14px;
+    left: 10px;
+    width: 64px;
+  }
+
+  .console-side-nav.expanded {
+    width: min(260px, calc(100vw - 20px));
+  }
+
+  .overview-grid {
+    grid-template-columns: 1fr;
   }
 
   .metrics {
@@ -1082,7 +1183,6 @@ dd {
 @media (max-width: 720px) {
   .registry-shell {
     width: min(100% - 20px, 1180px);
-    padding-top: 18px;
   }
 
   .command-bar,
@@ -1092,7 +1192,6 @@ dd {
     grid-template-columns: 1fr;
   }
 
-  .quiet-panel,
   .role-main {
     flex-direction: column;
   }
