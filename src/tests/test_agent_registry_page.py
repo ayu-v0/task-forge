@@ -366,6 +366,18 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert "isSideMenuOpen" in component_source
     assert "toggleSideMenu" in component_source
     assert "openRolesFromSideMenu" in component_source
+    assert "viewAgent(agent)" in component_source
+    assert "fetch(`/agents/${encodeURIComponent(requestedAgentId)}`)" in component_source
+    assert "retrySelectedAgent" in component_source
+    assert "role-detail-panel" in component_source
+    assert "detail-card-grid" in component_source
+    assert "advanced-config" in component_source
+    assert ".role-item.selected" in component_source
+    assert "Capability declaration" in component_source
+    assert "supports_concurrency" in component_source
+    assert "allows_auto_retry" in component_source
+    assert "model_context_limit" in component_source
+    assert "reserved_output_tokens" in component_source
     assert "console-side-nav" in component_source
     assert "Console navigation" in component_source
     assert "Expand console menu" in component_source

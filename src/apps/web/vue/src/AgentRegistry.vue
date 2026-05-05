@@ -13,6 +13,11 @@ const submitting = ref(false);
 const errorMessage = ref("");
 const isDrawerOpen = ref(false);
 const isSideMenuOpen = ref(false);
+const isRoleDetailOpen = ref(false);
+const selectedAgentId = ref("");
+const selectedAgentDetail = ref(null);
+const detailLoading = ref(false);
+const detailError = ref("");
 const roleSearch = ref("");
 const statusFilter = ref("all");
 
@@ -47,6 +52,13 @@ const statusOptions = [
   { value: "disabled", label: "Disabled" },
 ];
 
+const promptBudgetHighlights = [
+  ["Template", "template_name"],
+  ["Context limit", "model_context_limit"],
+  ["Reserved output", "reserved_output_tokens"],
+  ["Task input", "max_task_input_tokens"],
+];
+
 function formatPercent(value) {
   if (value === null || value === undefined) {
     return "No run history";
@@ -69,6 +81,7 @@ function openDrawer() {
 
 function closeDrawer() {
   isDrawerOpen.value = false;
+  closeRoleDetail();
 }
 
 function toggleSideMenu() {
@@ -82,6 +95,64 @@ function closeSideMenu() {
 function openRolesFromSideMenu() {
   openDrawer();
   closeSideMenu();
+}
+
+function closeRoleDetail() {
+  isRoleDetailOpen.value = false;
+  selectedAgentId.value = "";
+  selectedAgentDetail.value = null;
+  detailLoading.value = false;
+  detailError.value = "";
+}
+
+function formatJson(value) {
+  return JSON.stringify(value ?? {}, null, 2);
+}
+
+function formatDetailValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return "n/a";
+  }
+  return value;
+}
+
+function formatBoolean(value) {
+  return value ? "Yes" : "No";
+}
+
+function retrySelectedAgent() {
+  if (!selectedAgentId.value) {
+    return;
+  }
+  viewAgent({ id: selectedAgentId.value });
+}
+
+async function viewAgent(agent) {
+  const requestedAgentId = agent.id;
+  selectedAgentId.value = requestedAgentId;
+  selectedAgentDetail.value = null;
+  detailLoading.value = true;
+  detailError.value = "";
+  isRoleDetailOpen.value = true;
+
+  try {
+    const response = await fetch(`/agents/${encodeURIComponent(requestedAgentId)}`);
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`);
+    }
+    const payload = await response.json();
+    if (selectedAgentId.value === requestedAgentId && isRoleDetailOpen.value) {
+      selectedAgentDetail.value = payload;
+    }
+  } catch (error) {
+    if (selectedAgentId.value === requestedAgentId && isRoleDetailOpen.value) {
+      detailError.value = error.message || "Unable to load agent role detail.";
+    }
+  } finally {
+    if (selectedAgentId.value === requestedAgentId && isRoleDetailOpen.value) {
+      detailLoading.value = false;
+    }
+  }
 }
 
 function handleKeydown(event) {
@@ -362,8 +433,119 @@ onBeforeUnmount(() => {
           </label>
         </div>
 
+        <section v-if="isRoleDetailOpen" class="role-detail-panel" aria-live="polite">
+          <header class="role-detail-hero">
+            <div class="role-detail-title">
+              <p class="section-label">Role detail</p>
+              <h3>{{ selectedAgentDetail?.role_name || "Loading role" }}</h3>
+              <p v-if="selectedAgentDetail" class="role-detail-description">
+                {{ selectedAgentDetail.description || "No description" }}
+              </p>
+            </div>
+            <button class="icon-button" type="button" aria-label="Close role detail" @click="closeRoleDetail">x</button>
+          </header>
+
+          <div v-if="detailLoading" class="detail-state detail-state-loading">
+            <span class="detail-loading-dot"></span>
+            <p>Loading role detail...</p>
+          </div>
+          <div v-else-if="detailError" class="detail-state detail-state-error">
+            <p>{{ detailError }}</p>
+            <button class="ghost-button compact-action" type="button" @click="retrySelectedAgent">Retry</button>
+          </div>
+
+          <div v-else-if="selectedAgentDetail" class="role-detail-body">
+            <div class="role-detail-badges">
+              <span class="status-badge" :class="selectedAgentDetail.enabled ? 'enabled' : 'disabled'">
+                {{ selectedAgentDetail.enabled ? "Enabled" : "Disabled" }}
+              </span>
+              <span class="version-pill">v{{ selectedAgentDetail.version }}</span>
+              <span class="meta-pill">{{ selectedAgentDetail.timeout_seconds }}s timeout</span>
+              <span class="meta-pill">{{ selectedAgentDetail.max_retries }} retries</span>
+            </div>
+
+            <section class="detail-card-grid">
+              <article class="detail-card">
+                <p class="detail-card-label">Supported task types</p>
+                <div class="pill-row">
+                  <span v-for="taskTypeName in roleTaskTypes(selectedAgentDetail)" :key="taskTypeName" class="meta-pill">
+                    {{ taskTypeName }}
+                  </span>
+                </div>
+              </article>
+
+              <article class="detail-card">
+                <p class="detail-card-label">Capabilities</p>
+                <div class="pill-row">
+                  <span v-for="capability in selectedAgentDetail.capabilities || []" :key="capability" class="meta-pill">
+                    {{ capability }}
+                  </span>
+                  <span v-if="!(selectedAgentDetail.capabilities || []).length" class="muted">None</span>
+                </div>
+              </article>
+
+              <article class="detail-card">
+                <p class="detail-card-label">Runtime</p>
+                <dl class="detail-kv-grid">
+                  <div><dt>Timeout</dt><dd>{{ selectedAgentDetail.timeout_seconds }}s</dd></div>
+                  <div><dt>Retries</dt><dd>{{ selectedAgentDetail.max_retries }}</dd></div>
+                  <div>
+                    <dt>Concurrency</dt>
+                    <dd>{{ formatBoolean(selectedAgentDetail.capability_declaration?.supports_concurrency) }}</dd>
+                  </div>
+                  <div>
+                    <dt>Auto retry</dt>
+                    <dd>{{ formatBoolean(selectedAgentDetail.capability_declaration?.allows_auto_retry) }}</dd>
+                  </div>
+                </dl>
+              </article>
+
+              <article class="detail-card">
+                <p class="detail-card-label">Prompt budget</p>
+                <dl class="detail-kv-grid">
+                  <div v-for="[label, field] in promptBudgetHighlights" :key="field">
+                    <dt>{{ label }}</dt>
+                    <dd>{{ formatDetailValue(selectedAgentDetail.prompt_budget_policy?.[field]) }}</dd>
+                  </div>
+                </dl>
+              </article>
+            </section>
+
+            <section class="advanced-config">
+              <div class="advanced-config-header">
+                <p class="section-label">Advanced configuration</p>
+              </div>
+
+              <details class="detail-json-block" open>
+                <summary>Capability declaration</summary>
+                <pre>{{ formatJson(selectedAgentDetail.capability_declaration) }}</pre>
+              </details>
+
+              <details class="detail-json-block">
+                <summary>Prompt budget policy</summary>
+                <pre>{{ formatJson(selectedAgentDetail.prompt_budget_policy) }}</pre>
+              </details>
+
+              <details class="detail-json-block">
+                <summary>Input schema</summary>
+                <pre>{{ formatJson(selectedAgentDetail.input_schema) }}</pre>
+              </details>
+
+              <details class="detail-json-block">
+                <summary>Output schema</summary>
+                <pre>{{ formatJson(selectedAgentDetail.output_schema) }}</pre>
+              </details>
+            </section>
+          </div>
+        </section>
+
         <section class="role-list" aria-live="polite">
-          <article v-for="agent in filteredAgents" :key="agent.id" class="role-item">
+          <article
+            v-for="agent in filteredAgents"
+            :key="agent.id"
+            class="role-item"
+            :class="{ selected: isRoleDetailOpen && selectedAgentId === agent.id }"
+          >
             <div class="role-main">
               <div>
                 <h3>{{ agent.role_name }}</h3>
@@ -390,7 +572,20 @@ onBeforeUnmount(() => {
             </dl>
 
             <div class="role-actions">
-              <button class="drawer-primary" type="button">View</button>
+              <button
+                class="drawer-primary"
+                type="button"
+                :disabled="detailLoading && selectedAgentId === agent.id"
+                @click="viewAgent(agent)"
+              >
+                {{
+                  detailLoading && selectedAgentId === agent.id
+                    ? "Loading"
+                    : selectedAgentId === agent.id
+                      ? "Viewing"
+                      : "View"
+                }}
+              </button>
               <button type="button">Edit</button>
               <button type="button">{{ agent.enabled ? "Disable" : "Enable" }}</button>
             </div>
@@ -1077,6 +1272,200 @@ dd {
   margin-top: 20px;
 }
 
+.role-detail-panel {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+  border: 1px solid rgba(167, 139, 250, 0.34);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.18), transparent 42%),
+    rgba(255, 255, 255, 0.055);
+  padding: 16px;
+}
+
+.role-detail-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(139, 92, 246, 0.18), rgba(255, 255, 255, 0.035)),
+    rgba(0, 0, 0, 0.18);
+  padding: 14px;
+}
+
+.role-detail-title {
+  min-width: 0;
+}
+
+.role-detail-title h3 {
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+
+.role-detail-description {
+  margin: 0;
+  color: #94a3b8;
+  line-height: 1.55;
+}
+
+.role-detail-description {
+  margin-top: 8px;
+}
+
+.detail-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.18);
+  color: #94a3b8;
+  padding: 12px;
+}
+
+.detail-state p {
+  margin: 0;
+}
+
+.detail-state-loading {
+  justify-content: flex-start;
+}
+
+.detail-state-error {
+  border-color: rgba(244, 63, 94, 0.32);
+  background: rgba(244, 63, 94, 0.08);
+  color: #fecdd3;
+}
+
+.detail-loading-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #a78bfa;
+  box-shadow: 0 0 18px rgba(167, 139, 250, 0.78);
+  animation: pulse 900ms ease-in-out infinite alternate;
+}
+
+.compact-action {
+  min-height: 36px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.role-detail-body {
+  display: grid;
+  gap: 14px;
+}
+
+.role-detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.detail-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 12px;
+}
+
+.detail-card-label {
+  margin: 0;
+  color: #a78bfa;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.detail-kv-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.detail-kv-grid div {
+  min-width: 0;
+}
+
+.detail-kv-grid dt {
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.detail-kv-grid dd {
+  margin: 5px 0 0;
+  color: #f8fafc;
+  font-size: 0.92rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.advanced-config {
+  display: grid;
+  gap: 10px;
+}
+
+.advanced-config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.detail-json-block {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.2);
+  color: #cbd5e1;
+  overflow: hidden;
+}
+
+.detail-json-block summary {
+  cursor: pointer;
+  color: #ddd6fe;
+  font-size: 0.84rem;
+  font-weight: 800;
+  padding: 11px 12px;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.detail-json-block summary:hover,
+.detail-json-block summary:focus-visible {
+  background: rgba(139, 92, 246, 0.1);
+  color: #f8fafc;
+}
+
+.detail-json-block pre {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .role-list {
   display: grid;
   gap: 10px;
@@ -1096,6 +1485,16 @@ dd {
   border-color: rgba(139, 92, 246, 0.42);
   background: rgba(139, 92, 246, 0.07);
   transform: translateX(-2px);
+}
+
+.role-item.selected {
+  border-color: rgba(167, 139, 250, 0.62);
+  background:
+    linear-gradient(90deg, rgba(139, 92, 246, 0.16), rgba(255, 255, 255, 0.045) 34%),
+    rgba(139, 92, 246, 0.08);
+  box-shadow:
+    inset 3px 0 0 rgba(167, 139, 250, 0.82),
+    0 0 28px rgba(139, 92, 246, 0.12);
 }
 
 .role-state {
@@ -1187,8 +1586,13 @@ dd {
 
   .command-bar,
   .task-submit-panel,
+  .detail-card-grid,
   .drawer-tools,
   .role-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-kv-grid {
     grid-template-columns: 1fr;
   }
 
