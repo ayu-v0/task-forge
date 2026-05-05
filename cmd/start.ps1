@@ -2,6 +2,7 @@ param(
     [int]$ApiPort = 8000,
     [switch]$WithWorker,
     [switch]$Migrate,
+    [switch]$SkipMigrate,
     [switch]$InstallDeps,
     [switch]$BuildWeb,
     [switch]$NoPortFallback
@@ -20,6 +21,10 @@ function Resolve-PythonCommand {
     $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
     if (Test-Path $venvPython) {
         return $venvPython
+    }
+    $legacyVenvPython = Join-Path $ProjectRoot "venv\Scripts\python.exe"
+    if (Test-Path $legacyVenvPython) {
+        return $legacyVenvPython
     }
     return "python"
 }
@@ -47,6 +52,36 @@ function Resolve-ApiPort {
         }
     }
     throw "No free API port found near $PreferredPort."
+}
+
+function Resolve-DatabaseUrl {
+    if (-not [string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
+        return $env:DATABASE_URL.Trim()
+    }
+
+    $envPath = Join-Path $ProjectRoot ".env"
+    if (Test-Path $envPath) {
+        foreach ($line in Get-Content -Path $envPath -Encoding UTF8) {
+            $trimmed = $line.Trim()
+            if ($trimmed.StartsWith("#") -or -not $trimmed.Contains("=")) {
+                continue
+            }
+            $parts = $trimmed.Split("=", 2)
+            if ($parts[0].Trim() -eq "DATABASE_URL") {
+                return $parts[1].Trim().Trim('"').Trim("'")
+            }
+        }
+    }
+
+    $configPath = Join-Path $ProjectRoot "task_forge_config.json"
+    if (Test-Path $configPath) {
+        $config = Get-Content -Raw -Encoding UTF8 -Path $configPath | ConvertFrom-Json
+        if ($null -ne $config.database -and -not [string]::IsNullOrWhiteSpace($config.database.url)) {
+            return $config.database.url.Trim()
+        }
+    }
+
+    return "sqlite:///data/task_forge.sqlite3"
 }
 
 function Start-BackgroundProcess {
@@ -84,6 +119,8 @@ function Start-BackgroundProcess {
 }
 
 $Python = Resolve-PythonCommand
+$DatabaseUrl = Resolve-DatabaseUrl
+$ShouldAutoMigrate = $DatabaseUrl.StartsWith("sqlite:", [System.StringComparison]::OrdinalIgnoreCase)
 
 if ($InstallDeps) {
     Write-Host "Installing Python dependencies..."
@@ -95,9 +132,14 @@ if ($BuildWeb) {
     npm run build
 }
 
-if ($Migrate) {
+Write-Host "Database: $DatabaseUrl"
+
+if (($Migrate -or $ShouldAutoMigrate) -and -not $SkipMigrate) {
     Write-Host "Running database migrations..."
     & $Python -m alembic upgrade head
+}
+elseif ($SkipMigrate) {
+    Write-Host "Skipping database migrations."
 }
 
 $ResolvedApiPort = Resolve-ApiPort -PreferredPort $ApiPort

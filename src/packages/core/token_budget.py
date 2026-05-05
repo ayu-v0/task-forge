@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.packages.core.db.models import AgentRoleORM, ExecutionRunORM, TaskORM
+from src.packages.core.db.models import AgentRoleORM, ArtifactORM, ExecutionRunORM, TaskORM
 from src.packages.core.schemas import PromptBudgetPolicyRead
 
 
@@ -76,24 +76,73 @@ def _dependency_records(db: Session, task: TaskORM) -> list[dict[str, Any]]:
                 "latest_output": latest_run.output_snapshot if latest_run is not None else {},
                 "latest_output_keys": sorted((latest_run.output_snapshot or {}).keys()) if latest_run is not None else [],
                 "latest_run_status": latest_run.run_status if latest_run is not None else None,
-                "downstream_summary": {
-                    "task_id": dependency.id,
-                    "title": dependency.title,
-                    "status": dependency.status,
-                    "assigned_agent_role": dependency.assigned_agent_role,
-                    "latest_run_status": latest_run.run_status if latest_run is not None else None,
-                    "result_summary": build_result_summary(
-                        latest_run.output_snapshot if latest_run is not None else {},
-                        latest_run.error_message if latest_run is not None else None,
-                    ),
-                },
+                "latest_error_message": latest_run.error_message if latest_run is not None else None,
             }
         )
     return records
 
 
+def _dependency_context_request(task: TaskORM) -> dict[str, Any]:
+    payload = task.input_payload or {}
+    request = payload.get("dependency_context")
+    if isinstance(request, dict):
+        return request
+    return {}
+
+
+def _should_include_raw_content(task: TaskORM, dependency_task_id: str) -> bool:
+    request = _dependency_context_request(task)
+    if bool(request.get("include_raw_content")):
+        return True
+
+    explicit_dependency_ids = request.get("include_raw_content_for_dependency_ids")
+    if isinstance(explicit_dependency_ids, list):
+        normalized_ids = {str(item) for item in explicit_dependency_ids}
+        return dependency_task_id in normalized_ids
+    return False
+
+
+def _latest_artifact_for_dependency(db: Session, dependency_task_id: str) -> ArtifactORM | None:
+    return db.scalars(
+        select(ArtifactORM)
+        .where(ArtifactORM.task_id == dependency_task_id)
+        .order_by(ArtifactORM.created_at.desc(), ArtifactORM.id.desc())
+    ).first()
+
+
+def _resolve_dependency_context(
+    db: Session,
+    task: TaskORM,
+    dependency_record: dict[str, Any],
+) -> dict[str, Any]:
+    latest_artifact = _latest_artifact_for_dependency(db, dependency_record["task_id"])
+    latest_output = dependency_record["latest_output"]
+    latest_error = dependency_record.get("latest_error_message")
+    summary = (
+        latest_artifact.summary
+        if latest_artifact is not None and latest_artifact.summary
+        else build_result_summary(latest_output, latest_error)
+    )
+    context = {
+        "task_id": dependency_record["task_id"],
+        "title": dependency_record["title"],
+        "status": dependency_record["status"],
+        "assigned_agent_role": dependency_record["assigned_agent_role"],
+        "latest_run_status": dependency_record["latest_run_status"],
+        "result_summary": summary,
+    }
+    if _should_include_raw_content(task, dependency_record["task_id"]):
+        raw_content = (
+            latest_artifact.raw_content
+            if latest_artifact is not None and latest_artifact.raw_content
+            else latest_output
+        )
+        context["raw_content"] = raw_content or {}
+    return context
+
+
 def build_dependency_summaries(db: Session, task: TaskORM) -> list[dict[str, Any]]:
-    return [item["downstream_summary"] for item in _dependency_records(db, task)]
+    return [_resolve_dependency_context(db, task, item) for item in _dependency_records(db, task)]
 
 
 def _dependency_summary_source(db: Session, task: TaskORM) -> str:
@@ -194,8 +243,14 @@ def build_result_summary(output_snapshot: dict[str, Any] | None, error_message: 
         "status": "error" if error_message else ("success" if payload else "empty"),
         "has_output": bool(payload),
         "output_summary": _build_summary(payload),
+        "summary": _build_summary(payload),
         "output_keys": sorted(payload.keys()),
         "field_count": len(payload),
+        "structured_result": {
+            "kind": "object",
+            "keys": sorted(payload.keys()),
+            "field_count": len(payload),
+        },
         "error_summary": _build_summary(error_message) if error_message else None,
     }
 
@@ -227,6 +282,7 @@ def _summary_only_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "summary": _build_summary(payload),
         "structured_result": {
+            "kind": "object",
             "keys": sorted(payload.keys()),
             "field_count": len(payload),
         },
@@ -292,9 +348,11 @@ def _section_counts(
 def build_execution_budget(db: Session, task: TaskORM, agent_role: AgentRoleORM) -> dict[str, Any]:
     policy = _load_policy(agent_role)
     trimmed_payload = deepcopy(task.input_payload or {})
+    trimmed_payload.setdefault("task_summary", _summary_only_payload(task.input_payload or {}))
     dependency_summaries = build_dependency_summaries(db, task)
     if dependency_summaries:
         trimmed_payload["dependency_summaries"] = dependency_summaries
+        trimmed_payload["downstream_summary"] = dependency_summaries
     trim_steps: list[str] = []
     degradation_mode = "full_context"
     history_cap = policy.max_history_background_tokens

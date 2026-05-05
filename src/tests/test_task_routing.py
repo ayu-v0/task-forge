@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from src.packages.core.db.models import ExecutionRunORM
+from src.packages.core.db.models import ExecutionRunORM, TaskBatchORM, TaskORM
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -131,95 +131,37 @@ def _register_agent(
 
 
 def _seed_history(role_id: str, role_name: str, *, run_statuses: list[str], suffix: str, prompt_tokens: int = 10, completion_tokens: int = 5, latency_ms: int = 100) -> None:
-    batch_id = f"batch_{uuid.uuid4().hex}"
-    task_id = f"task_{uuid.uuid4().hex}"
     engine = create_engine(_database_url())
     with Session(engine) as session:
-        session.execute(
-            text(
-                """
-                INSERT INTO task_batches (
-                    id,
-                    title,
-                    description,
-                    created_by,
-                    created_at,
-                    status,
-                    total_tasks,
-                    metadata
-                ) VALUES (
-                    :id,
-                    :title,
-                    :description,
-                    'pytest',
-                    NOW(),
-                    'submitted',
-                    1,
-                    '{}'::jsonb
-                )
-                """
-            ),
-            {
-                "id": batch_id,
-                "title": f"{ROUTING_PREFIX}history-batch-{suffix}-{role_name}",
-                "description": "routing seeded batch",
-            },
+        batch = TaskBatchORM(
+            title=f"{ROUTING_PREFIX}history-batch-{suffix}-{role_name}",
+            description="routing seeded batch",
+            created_by="pytest",
+            status="submitted",
+            total_tasks=1,
         )
-        session.execute(
-            text(
-                """
-                INSERT INTO tasks (
-                    id,
-                    batch_id,
-                    title,
-                    description,
-                    task_type,
-                    priority,
-                    status,
-                    input_payload,
-                    expected_output_schema,
-                    assigned_agent_role,
-                    dependency_ids,
-                    retry_count,
-                    cancellation_requested,
-                    cancellation_requested_at,
-                    cancellation_reason,
-                    created_at,
-                    updated_at
-                ) VALUES (
-                    :id,
-                    :batch_id,
-                    :title,
-                    :description,
-                    'generate',
-                    'medium',
-                    'success',
-                    '{}'::jsonb,
-                    '{}'::jsonb,
-                    :assigned_agent_role,
-                    ARRAY[]::varchar[],
-                    0,
-                    FALSE,
-                    NULL,
-                    NULL,
-                    NOW(),
-                    NOW()
-                )
-                """
-            ),
-            {
-                "id": task_id,
-                "batch_id": batch_id,
-                "title": f"{ROUTING_PREFIX}history-task-{suffix}-{role_name}",
-                "description": "routing seeded task",
-                "assigned_agent_role": role_name,
-            },
+        session.add(batch)
+        session.flush()
+        task = TaskORM(
+            batch_id=batch.id,
+            title=f"{ROUTING_PREFIX}history-task-{suffix}-{role_name}",
+            description="routing seeded task",
+            task_type="generate",
+            priority="medium",
+            status="success",
+            input_payload={},
+            expected_output_schema={},
+            assigned_agent_role=role_name,
+            dependency_ids=[],
+            retry_count=0,
         )
+        session.add(task)
+        session.flush()
         for index, run_status in enumerate(run_statuses, start=1):
             session.add(
                 ExecutionRunORM(
                     id=f"run_{uuid.uuid4().hex}",
-                    task_id=task_id,
+                    task_id=task.id,
                     agent_role_id=role_id,
                     run_status=run_status,
                     logs=[],
@@ -306,7 +248,7 @@ def test_routes_builtin_search_and_code_roles_by_capability() -> None:
     assert code_response.status_code == 201
     code_tasks = code_response.json()["tasks"]
     assert all(task["assigned_agent_role"] == "code_agent" for task in code_tasks)
-    assert all("via capability,schema" in task["routing_reason"] for task in code_tasks)
+    assert all("via task_type,capability,schema" in task["routing_reason"] for task in code_tasks)
 
 
 def test_prefers_higher_success_rate_when_multiple_roles_match_same_task() -> None:

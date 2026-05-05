@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 
 revision = "20260416_000004"
@@ -23,9 +22,9 @@ def upgrade() -> None:
         "execution_runs",
         sa.Column(
             "budget_report",
-            postgresql.JSONB(astext_type=sa.Text()),
+            sa.JSON(),
             nullable=False,
-            server_default=sa.text("'{}'::jsonb"),
+            server_default=sa.text("'{}'"),
         ),
     )
 

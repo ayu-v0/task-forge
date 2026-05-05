@@ -1,0 +1,6 @@
+{
+  "database": {
+    "driver": "sqlite",
+    "url": "sqlite:///data/task_forge.sqlite3"
+  }
+}

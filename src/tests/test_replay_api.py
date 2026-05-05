@@ -195,7 +195,9 @@ def test_run_replay_returns_input_output_logs_status_history_and_routing_snapsho
     assert payload["routing_snapshot"]["run_id"] == run_id
     assert payload["routing_snapshot"]["task_id"] == task_id
     assert payload["routing_snapshot"]["routing_reason"] is not None
-    assert payload["routing_snapshot"]["input_snapshot"] == {"text": "hello"}
+    assert payload["routing_snapshot"]["input_snapshot"]["text"] == "hello"
+    assert payload["routing_snapshot"]["input_snapshot"]["intent"]["source"] == "rules_fallback"
+    assert "deliverable_contract" in payload["routing_snapshot"]["input_snapshot"]
     assert payload["routing_snapshot"]["task_summary"]["task_id"] == task_id
     assert payload["routing_snapshot"]["dependency_summaries"] == []
     assert payload["timeline"]["task_id"] == task_id
@@ -351,4 +353,53 @@ def test_run_replay_includes_dependency_summaries_for_downstream_consumption() -
     assert payload["routing_snapshot"]["dependency_summaries"][0]["task_id"] != ""
     assert payload["routing_snapshot"]["dependency_summaries"][0]["result_summary"]["status"] == "success"
     assert "summary len=2000" in payload["routing_snapshot"]["dependency_summaries"][0]["result_summary"]["output_summary"]["body"]
+    assert "raw_content" not in payload["routing_snapshot"]["dependency_summaries"][0]
     assert payload["routing_snapshot"]["input_snapshot"]["dependency_summaries"] == payload["routing_snapshot"]["dependency_summaries"]
+
+
+def test_run_replay_can_show_explicitly_requested_dependency_raw_content() -> None:
+    suffix = uuid.uuid4().hex[:8]
+    _register_agent(client, role_name=f"{TEST_PREFIX}worker-{suffix}", supported_task_types=["generate"])
+    payload = _batch_payload("generate", suffix)
+    response = client.post("/task-batches", json=payload)
+    assert response.status_code == 201
+    dependent_task_id = response.json()["tasks"][1]["task_id"]
+
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        dependent_task = session.get(TaskORM, dependent_task_id)
+        assert dependent_task is not None
+        dependent_task.input_payload = {
+            "text": "world",
+            "dependency_context": {"include_raw_content": True},
+        }
+        session.commit()
+    with Session(engine) as session:
+        first_claim = claim_next_task(session)
+        assert first_claim is not None
+        first_task, first_run, _agent_role = first_claim
+        mark_run_success(session, first_task.id, first_run.id, {"artifact": "report", "body": "x" * 2000}, 111)
+        session.commit()
+
+    with Session(engine) as session:
+        second_claim = None
+        run_id = None
+        for _ in range(3):
+            claimed = claim_next_task(session)
+            if claimed is None:
+                continue
+            candidate_task, candidate_run, _agent_role = claimed
+            session.commit()
+            if candidate_task.id == dependent_task_id:
+                second_claim = claimed
+                run_id = candidate_run.id
+                break
+        assert second_claim is not None
+        assert run_id is not None
+
+    replay_response = client.get(f"/runs/{run_id}/replay")
+    assert replay_response.status_code == 200
+    payload = replay_response.json()
+    dependency_context = payload["routing_snapshot"]["dependency_summaries"][0]
+    assert dependency_context["raw_content"]["artifact"] == "report"
+    assert dependency_context["raw_content"]["body"] == "x" * 2000

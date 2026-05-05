@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     app_name: str = "TaskForge API"
     app_version: str = "0.1.0"
     debug: bool = False
-    database_url: str
+    database_url: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

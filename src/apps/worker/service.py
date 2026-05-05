@@ -7,6 +7,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from src.apps.worker.registry import get_worker_agent
+from src.packages.core.artifact_store import create_run_artifacts
 from src.packages.core.db.models import (
     AgentRoleORM,
     AssignmentORM,
@@ -15,7 +16,7 @@ from src.packages.core.db.models import (
     TaskORM,
 )
 from src.packages.core.task_state_machine import transition_task_status
-from src.packages.core.token_budget import build_execution_budget
+from src.packages.core.token_budget import build_execution_budget, build_result_summary
 
 
 class WorkerService:
@@ -30,7 +31,16 @@ class WorkerService:
         run: ExecutionRunORM,
         agent_role: AgentRoleORM,
         message: str,
+        payload_extra: dict[str, Any] | None = None,
     ) -> None:
+        payload = {
+            "task_id": task.id,
+            "run_id": run.id,
+            "agent_role_id": agent_role.id,
+            "role_name": agent_role.role_name,
+        }
+        if payload_extra:
+            payload.update(payload_extra)
         self.db.add(
             EventLogORM(
                 batch_id=task.batch_id,
@@ -39,12 +49,7 @@ class WorkerService:
                 event_type=event_type,
                 event_status=run.run_status,
                 message=message,
-                payload={
-                    "task_id": task.id,
-                    "run_id": run.id,
-                    "agent_role_id": agent_role.id,
-                    "role_name": agent_role.role_name,
-                },
+                payload=payload,
             )
         )
 
@@ -93,6 +98,7 @@ class WorkerService:
         execution_budget = build_execution_budget(self.db, task, agent_role)
         budget_report = execution_budget["budget_report"]
         task_input_payload = execution_budget["trimmed_input_payload"]
+        task.input_payload = task_input_payload
 
         run = ExecutionRunORM(
             task_id=task.id,
@@ -137,11 +143,21 @@ class WorkerService:
                 },
             )
             finished_at = datetime.now(timezone.utc)
+            final_result = dict(result)
+            final_result.setdefault("result_summary", build_result_summary(final_result))
+
             run.run_status = "succeeded"
             run.finished_at = finished_at
-            run.output_snapshot = result
+            run.output_snapshot = final_result
             run.logs = [*run.logs, "Execution completed successfully"]
             run.latency_ms = max(int((finished_at - started_at).total_seconds() * 1000), 0)
+            artifacts = create_run_artifacts(
+                self.db,
+                task_id=task.id,
+                run_id=run.id,
+                result=final_result,
+                input_snapshot=run.input_snapshot or task.input_payload,
+            )
             assignment.assignment_status = "fulfilled"
             transition_task_status(
                 self.db,
@@ -157,6 +173,24 @@ class WorkerService:
                 run=run,
                 agent_role=agent_role,
                 message="Worker execution finished",
+                payload_extra={
+                    "artifact_id": artifacts[0].id if artifacts else None,
+                    "artifact_type": artifacts[0].artifact_type if artifacts else None,
+                    "artifact_ids": [artifact.id for artifact in artifacts],
+                    "artifact_types": [artifact.artifact_type for artifact in artifacts],
+                    "deliverable_artifact_ids": [
+                        artifact.id
+                        for artifact in artifacts
+                        if artifact.metadata_json.get("artifact_role") == "final_deliverable"
+                    ],
+                    "deliverable_count": len(
+                        [
+                            artifact
+                            for artifact in artifacts
+                            if artifact.metadata_json.get("artifact_role") == "final_deliverable"
+                        ]
+                    ),
+                },
             )
             self.db.flush()
             return run

@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from src.apps.api.settings import settings
+from src.packages.core.db.session import create_engine_from_env
 
 
-engine = create_engine(settings.database_url)
+engine = create_engine_from_env()
 
 
 def get_db() -> Generator[Session, None, None]:

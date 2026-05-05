@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import httpx
@@ -34,8 +35,9 @@ ROLE_SYSTEM_PROMPTS = {
         "Use the result object to provide findings, keywords, search plan, and source suggestions."
     ),
     "code_agent": (
-        "You are a code implementation planner. Return concise structured JSON. "
-        "Use the result object to provide implementation steps, risks, and verification guidance."
+        "You are a code implementation agent. Return concise structured JSON. "
+        "When the task asks for code, deliver usable source code as result.deliverables code_file items. "
+        "Use implementation steps and risks only as supporting context, not as the primary deliverable."
     ),
     "planner_agent": (
         "You are a planning agent. Return concise structured JSON. "
@@ -51,7 +53,7 @@ ROLE_SYSTEM_PROMPTS = {
     ),
 }
 
-REQUIRED_FIELDS = ("status", "summary", "result", "warnings", "next_action_hint")
+REQUIRED_FIELDS = ("status", "summary", "result")
 RAW_RESPONSE_PREVIEW_CHARS = 800
 
 
@@ -102,6 +104,129 @@ def _extract_json_block(text: str) -> str:
     return stripped[start : end + 1]
 
 
+def _deliverable_contract(task: TaskORM) -> dict[str, Any]:
+    payload = task.input_payload if isinstance(task.input_payload, dict) else {}
+    contract = payload.get("deliverable_contract")
+    return contract if isinstance(contract, dict) else {}
+
+
+def _expected_artifact_types(task: TaskORM) -> set[str]:
+    expected = _deliverable_contract(task).get("expected_artifact_types")
+    if not isinstance(expected, list):
+        return set()
+    return {str(item).strip() for item in expected if str(item).strip()}
+
+
+def _language_extension(language: str) -> str:
+    return {
+        "python": ".py",
+        "py": ".py",
+        "go": ".go",
+        "golang": ".go",
+        "javascript": ".js",
+        "js": ".js",
+        "typescript": ".ts",
+        "ts": ".ts",
+        "powershell": ".ps1",
+        "shell": ".sh",
+        "bash": ".sh",
+        "markdown": ".md",
+    }.get(language.strip().lower(), ".txt")
+
+
+def _extract_fenced_code(text: str) -> tuple[str, str] | None:
+    match = re.search(r"```([a-zA-Z0-9_+-]*)\s*\n(.*?)```", text, flags=re.DOTALL)
+    if not match:
+        return None
+    language = match.group(1).strip().lower()
+    code = match.group(2).strip()
+    if not code:
+        return None
+    return language, code
+
+
+def _extract_content_field(text: str) -> str | None:
+    match = re.search(r'"content"\s*:\s*"((?:\\.|[^"\\])*)"', text, flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(f'"{match.group(1)}"')
+    except json.JSONDecodeError:
+        return match.group(1).replace("\\n", "\n").replace('\\"', '"')
+
+
+def _wrap_non_json_model_output(
+    *,
+    role_name: str,
+    task: TaskORM,
+    context: WorkerContext,
+    content_text: str,
+    parse_error: Exception,
+    token_usage: dict[str, int] | None,
+) -> dict[str, Any]:
+    raw_content = (_extract_content_field(content_text) or content_text).strip()
+    expected_types = _expected_artifact_types(task)
+    payload = task.input_payload if isinstance(task.input_payload, dict) else {}
+    language = str(payload.get("language") or "").strip().lower()
+    warnings = [
+        "model_output_wrapped_from_non_json",
+        f"model_output_parse_error: {parse_error}",
+    ]
+    result: dict[str, Any] = {"content": raw_content}
+
+    if "document" in expected_types:
+        result["deliverables"] = [
+            {
+                "type": "document",
+                "path": f"generated/{task.id}.md",
+                "title": task.title,
+                "language": "markdown",
+                "content": raw_content,
+            }
+        ]
+    elif "code_file" in expected_types:
+        fenced = _extract_fenced_code(content_text)
+        if fenced is not None:
+            fence_language, code = fenced
+            output_language = fence_language or language or "text"
+            result["deliverables"] = [
+                {
+                    "type": "code_file",
+                    "path": f"generated/{task.id}{_language_extension(output_language)}",
+                    "language": output_language,
+                    "change_type": "created",
+                    "content": code,
+                }
+            ]
+        else:
+            warnings.append("code_file_contract_without_detectable_code_block")
+            result["deliverables"] = [
+                {
+                    "type": "document",
+                    "path": f"generated/{task.id}.md",
+                    "title": task.title,
+                    "language": "markdown",
+                    "content": raw_content,
+                }
+            ]
+    elif "code_patch" in expected_types:
+        warnings.append("code_patch_contract_without_diff")
+
+    return _normalize_payload(
+        role_name,
+        task,
+        context,
+        {
+            "status": "success",
+            "summary": "Model returned non-JSON content; wrapped as deliverable content.",
+            "result": result,
+            "warnings": warnings,
+            "next_action_hint": None,
+        },
+        token_usage=token_usage,
+    )
+
+
 def _normalize_payload(
     role_name: str,
     task: TaskORM,
@@ -123,7 +248,7 @@ def _normalize_payload(
     result.setdefault("task_id", task.id)
     result.setdefault("context", _serialize_context(context))
 
-    warnings = payload.get("warnings")
+    warnings = payload.get("warnings", [])
     if not isinstance(warnings, list):
         warnings = [str(warnings)] if warnings else []
 
@@ -160,7 +285,16 @@ def _build_request_body(
     instruction = (
         "Return exactly one JSON object with keys "
         "'status', 'summary', 'result', 'warnings', and 'next_action_hint'. "
-        "The result object should include the useful structured output for this role."
+        "The result object should include the useful structured output for this role. "
+        "If you produce code, include result.deliverables with a code_file item containing "
+        "type, path, language, change_type, and content. "
+        "Follow task.input_payload.deliverable_contract exactly when it is present. "
+        "If expected_artifact_types contains document and presentation_format is markdown, "
+        "return result.deliverables with a document item containing markdown content. "
+        "If include_code_block is true, include fenced code blocks in that document. "
+        "If expected_artifact_types contains code_file, return code_file items. "
+        "If expected_artifact_types contains code_patch, return code_patch items. "
+        "Do not return only summary when a deliverable contract exists."
     )
     request_payload = {
         "role_name": role_name,
@@ -216,23 +350,31 @@ def _call_openai_compatible_model(
     if not choices:
         raise ValueError("Model response missing choices")
 
-    message = choices[0].get("message") or {}
-    content_text = _extract_message_text(message.get("content"))
-    try:
-        json_text = _extract_json_block(content_text)
-        structured_payload = json.loads(json_text)
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            "Model response could not be parsed as JSON: "
-            f"{exc}; raw_response_preview={_preview_text(content_text)}"
-        ) from exc
-
     usage = payload.get("usage") or {}
     token_usage = {
         "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
         "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
         "total_tokens": int(usage.get("total_tokens", 0) or 0),
     }
+    message = choices[0].get("message") or {}
+    content_text = _extract_message_text(message.get("content"))
+    try:
+        json_text = _extract_json_block(content_text)
+        structured_payload = json.loads(json_text)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        if not content_text.strip():
+            raise ValueError(
+                "Model response could not be parsed as JSON: "
+                f"{exc}; raw_response_preview={_preview_text(content_text)}"
+            ) from exc
+        return _wrap_non_json_model_output(
+            role_name=role_name,
+            task=task,
+            context=context,
+            content_text=content_text,
+            parse_error=exc,
+            token_usage=token_usage,
+        )
     return _normalize_payload(
         role_name,
         task,

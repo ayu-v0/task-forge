@@ -4,7 +4,13 @@ from dataclasses import dataclass
 
 from src.packages.core.db.models import AgentRoleORM, TaskORM
 
-ROUTING_META_INPUT_KEYS = {"cost_hint", "timeout_seconds"}
+ROUTING_META_INPUT_KEYS = {
+    "cost_hint",
+    "timeout_seconds",
+    "intent",
+    "deliverable_contract",
+    "routing_hints",
+}
 
 
 @dataclass(frozen=True)
@@ -162,7 +168,7 @@ def _build_candidate(
     schema_compatible = _schema_compatible(task, role)
     default_worker = _is_default_worker(role)
 
-    if not any([matched_task_type, matched_capability, schema_compatible, default_worker]):
+    if not any([matched_task_type, matched_capability, default_worker]):
         return None
 
     if not _meets_timeout_requirement(task, role):

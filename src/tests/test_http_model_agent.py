@@ -1,206 +1,175 @@
 from __future__ import annotations
 
-import json
-import sys
-import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-from unittest.mock import Mock, patch
 
-ROOT = Path(__file__).resolve().parents[2]
-
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from src.apps.worker.http_model_agent import run_model_agent_if_enabled
+from src.apps.worker import http_model_agent
+from src.apps.worker.http_model_agent import _normalize_payload, run_model_agent_if_enabled
 from src.apps.worker.types import WorkerContext
 from src.packages.core.db.models import TaskORM
 
 
-def _make_config_path() -> Path:
-    workspace_tmp = ROOT / ".workplace" / "pytest-http-model"
-    workspace_tmp.mkdir(parents=True, exist_ok=True)
-    return workspace_tmp / f"model-config-{uuid.uuid4().hex}.json"
+def test_normalize_payload_defaults_optional_model_fields() -> None:
+    task = TaskORM(
+        id="task_1",
+        batch_id="batch_1",
+        title="write hello world",
+        task_type="code",
+        input_payload={"prompt": "write hello world", "language": "python"},
+        expected_output_schema={"type": "object"},
+    )
+    context = WorkerContext(
+        run_id="run_1",
+        task_id="task_1",
+        agent_role_name="code_agent",
+        started_at=datetime.now(timezone.utc),
+        cancellation_check=lambda: False,
+    )
+
+    payload = _normalize_payload(
+        "code_agent",
+        task,
+        context,
+        {
+            "status": "success",
+            "summary": "generated hello world",
+            "result": {"code": "print('Hello, World!')\n", "language": "python"},
+        },
+    )
+
+    assert payload["warnings"] == []
+    assert payload["next_action_hint"] is None
+    assert payload["result"]["code"] == "print('Hello, World!')\n"
+    assert payload["stage"] == "code"
 
 
-def test_http_model_agent_uses_json_config_and_parses_response(monkeypatch) -> None:
-    config_path = _make_config_path()
-    try:
-        config_path.write_text(
-            json.dumps(
-                {
-                    "enabled": True,
-                    "request": {
-                        "format": "openai_chat_completions",
-                        "url": "https://example.test/v1/chat/completions",
-                        "timeout_seconds": 30,
-                        "headers": {
-                            "Authorization": "Bearer ${TEST_HTTP_MODEL_KEY}",
-                            "Content-Type": "application/json",
-                        },
-                    },
-                    "defaults": {
-                        "model": "test-model",
-                        "temperature": 0.1,
-                        "max_tokens": 512,
-                    },
-                    "agents": {
-                        "search_agent": {
-                            "system_prompt": "Search prompt",
-                        }
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("TASK_FORGE_MODEL_CONFIG", str(config_path))
-        monkeypatch.setenv("TEST_HTTP_MODEL_KEY", "secret-key")
-
-        task = TaskORM(
-            id="task-1",
-            title="Search task",
-            task_type="research_topic",
-            input_payload={"query": "httpx json parsing"},
-            expected_output_schema={"type": "object"},
-        )
-        context = WorkerContext(
-            run_id="run-1",
-            task_id="task-1",
-            agent_role_name="search_agent",
-            started_at=datetime.now(timezone.utc),
-            cancellation_check=lambda: False,
-        )
-
-        response = Mock()
-        response.json.return_value = {
-            "choices": [
-                {
-                    "message": {
-                        "content": json.dumps(
-                            {
-                                "status": "ok",
-                                "summary": "researched topic",
-                                "result": {"findings": ["httpx"]},
-                                "warnings": [],
-                                "next_action_hint": "draft answer",
-                            }
-                        )
-                    }
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 11,
-                "completion_tokens": 17,
-                "total_tokens": 28,
+def test_run_model_agent_wraps_non_json_document_output(monkeypatch) -> None:
+    task = TaskORM(
+        id="task_essay",
+        batch_id="batch_1",
+        title="写作文",
+        task_type="worker_execute",
+        input_payload={
+            "prompt": "写一篇800字的作文。作文内容是：我的母亲",
+            "deliverable_contract": {
+                "expected_artifact_types": ["document"],
+                "presentation_format": "markdown",
+                "file_extension": ".md",
+                "include_code_block": False,
+                "require_file_level_artifact": False,
+                "allow_primary_json_only": False,
             },
-        }
-        response.raise_for_status.return_value = None
+        },
+        expected_output_schema={"type": "object"},
+    )
+    context = WorkerContext(
+        run_id="run_1",
+        task_id="task_essay",
+        agent_role_name="worker_agent",
+        started_at=datetime.now(timezone.utc),
+        cancellation_check=lambda: False,
+    )
 
-        with patch("src.apps.worker.http_model_agent.httpx.post", return_value=response) as mocked_post:
-            payload = run_model_agent_if_enabled("search_agent", task, context)
+    monkeypatch.setattr(
+        http_model_agent,
+        "resolve_model_request_config",
+        lambda role_name: {
+            "enabled": True,
+            "request_format": "openai_chat_completions",
+            "url": "http://model.local/v1/chat/completions",
+            "headers": {},
+            "model": "worker-test",
+            "temperature": 0,
+            "max_tokens": 800,
+            "timeout_seconds": 1,
+            "extra_body": {},
+        },
+    )
 
-        assert payload is not None
-        assert payload["status"] == "ok"
-        assert payload["stage"] == "search"
-        assert payload["result"]["stage"] == "search"
-        assert payload["result"]["task_id"] == "task-1"
-        assert payload["_execution_meta"]["token_usage"]["total_tokens"] == 28
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
 
-        _, kwargs = mocked_post.call_args
-        assert kwargs["headers"]["Authorization"] == "Bearer secret-key"
-        assert kwargs["json"]["model"] == "test-model"
-        assert kwargs["json"]["messages"][0]["content"] == "Search prompt"
-    finally:
-        config_path.unlink(missing_ok=True)
-
-
-def test_http_model_agent_returns_none_when_disabled(monkeypatch) -> None:
-    config_path = _make_config_path()
-    try:
-        config_path.write_text(json.dumps({"enabled": False}), encoding="utf-8")
-        monkeypatch.setenv("TASK_FORGE_MODEL_CONFIG", str(config_path))
-
-        task = TaskORM(
-            id="task-2",
-            title="No-op task",
-            task_type="research_topic",
-            input_payload={"query": "disabled"},
-            expected_output_schema={"type": "object"},
-        )
-        context = WorkerContext(
-            run_id="run-2",
-            task_id="task-2",
-            agent_role_name="search_agent",
-            started_at=datetime.now(timezone.utc),
-            cancellation_check=lambda: False,
-        )
-
-        payload = run_model_agent_if_enabled("search_agent", task, context)
-
-        assert payload is None
-    finally:
-        config_path.unlink(missing_ok=True)
-
-
-def test_http_model_agent_parse_error_includes_raw_response_preview(monkeypatch) -> None:
-    config_path = _make_config_path()
-    try:
-        config_path.write_text(
-            json.dumps(
-                {
-                    "enabled": True,
-                    "request": {
-                        "format": "openai_chat_completions",
-                        "url": "https://example.test/v1/chat/completions",
-                        "timeout_seconds": 30,
-                    },
-                    "defaults": {
-                        "model": "test-model",
-                        "temperature": 0.1,
-                        "max_tokens": 512,
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("TASK_FORGE_MODEL_CONFIG", str(config_path))
-
-        task = TaskORM(
-            id="task-3",
-            title="Bad JSON task",
-            task_type="research_topic",
-            input_payload={"query": "bad json"},
-            expected_output_schema={"type": "object"},
-        )
-        context = WorkerContext(
-            run_id="run-3",
-            task_id="task-3",
-            agent_role_name="search_agent",
-            started_at=datetime.now(timezone.utc),
-            cancellation_check=lambda: False,
-        )
-
-        response = Mock()
-        response.json.return_value = {
-            "choices": [
-                {
-                    "message": {
-                        "content": '{"status": "ok", "summary": "broken" "result": {}}'
+        def json(self) -> dict:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "我的母亲是一位平凡而伟大的女性。\n她总是在我需要时出现。"
+                        }
                     }
-                }
-            ]
-        }
-        response.raise_for_status.return_value = None
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 9, "total_tokens": 12},
+            }
 
-        with patch("src.apps.worker.http_model_agent.httpx.post", return_value=response):
-            try:
-                run_model_agent_if_enabled("search_agent", task, context)
-            except ValueError as exc:
-                message = str(exc)
-            else:
-                raise AssertionError("Expected ValueError for broken JSON")
+    monkeypatch.setattr(http_model_agent.httpx, "post", lambda *_, **__: Response())
 
-        assert "raw_response_preview=" in message
-        assert "broken" in message
-    finally:
-        config_path.unlink(missing_ok=True)
+    payload = run_model_agent_if_enabled("worker_agent", task, context)
+
+    assert payload is not None
+    assert payload["status"] == "success"
+    assert "model_output_wrapped_from_non_json" in payload["warnings"]
+    deliverable = payload["result"]["deliverables"][0]
+    assert deliverable["type"] == "document"
+    assert deliverable["path"] == "generated/task_essay.md"
+    assert "我的母亲" in deliverable["content"]
+
+
+def test_run_model_agent_extracts_content_field_from_malformed_json(monkeypatch) -> None:
+    task = TaskORM(
+        id="task_essay",
+        batch_id="batch_1",
+        title="写作文",
+        task_type="worker_execute",
+        input_payload={
+            "prompt": "写作文",
+            "deliverable_contract": {
+                "expected_artifact_types": ["document"],
+                "presentation_format": "markdown",
+            },
+        },
+        expected_output_schema={"type": "object"},
+    )
+    context = WorkerContext(
+        run_id="run_1",
+        task_id="task_essay",
+        agent_role_name="worker_agent",
+        started_at=datetime.now(timezone.utc),
+        cancellation_check=lambda: False,
+    )
+    monkeypatch.setattr(
+        http_model_agent,
+        "resolve_model_request_config",
+        lambda role_name: {
+            "enabled": True,
+            "request_format": "openai_chat_completions",
+            "url": "http://model.local/v1/chat/completions",
+            "headers": {},
+            "model": "worker-test",
+            "temperature": 0,
+            "max_tokens": 800,
+            "timeout_seconds": 1,
+            "extra_body": {},
+        },
+    )
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"status":"success","summary":"ok","result":{"content":"我的母亲\\n她很温柔"} "warnings":[]}'
+                        }
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(http_model_agent.httpx, "post", lambda *_, **__: Response())
+
+    payload = run_model_agent_if_enabled("worker_agent", task, context)
+
+    assert payload is not None
+    assert payload["result"]["deliverables"][0]["content"] == "我的母亲\n她很温柔"

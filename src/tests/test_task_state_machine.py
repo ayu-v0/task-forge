@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from src.tests.db_test_utils import decode_json_value
 
 ROOT = Path(__file__).resolve().parents[2]
 STATE_MACHINE_PREFIX = "state-machine-test-"
@@ -120,9 +121,10 @@ def test_records_event_log_for_successful_transitions() -> None:
         ).scalar_one()
 
     assert statuses == ["queued", "running", "success"]
-    assert payload["from_status"] == "pending"
-    assert payload["to_status"] == "queued"
-    assert payload["source"] == "router"
+    decoded_payload = decode_json_value(payload)
+    assert decoded_payload["from_status"] == "pending"
+    assert decoded_payload["to_status"] == "queued"
+    assert decoded_payload["source"] == "router"
 
 
 def test_supports_retry_transition_from_failed_to_queued() -> None:
