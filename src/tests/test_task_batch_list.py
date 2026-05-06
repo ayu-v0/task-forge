@@ -177,15 +177,34 @@ def test_list_task_batches_returns_empty_list_when_no_batches_exist() -> None:
 def test_console_batches_page_is_accessible() -> None:
     response = client.get("/console/batches")
     assert response.status_code == 200
-    assert "Batch Console" in response.text
+    assert "Task Forge" in response.text
+    assert "/console/vue/" in response.text
 
 
-def test_console_batches_page_includes_embedded_detail_panel() -> None:
+def test_console_batches_detail_route_is_compatible_with_agent_console_entry() -> None:
+    response = client.get("/console/batches/sample-batch-id")
+    assert response.status_code == 200
+    assert "Task Forge" in response.text
+    assert "/console/vue/" in response.text
+
+
+def test_console_batches_window_is_owned_by_agent_registry_vue() -> None:
     response = client.get("/console/batches")
     assert response.status_code == 200
-    assert 'id="batch-detail-overlay"' in response.text
-    assert 'id="batch-detail-panel"' in response.text
-    assert 'id="detail-body"' in response.text
+    component_source = (ROOT / "src" / "apps" / "web" / "vue" / "src" / "AgentRegistry.vue").read_text(encoding="utf-8")
+    assert "openBatchWindow" in component_source
+    assert "batch-window" in component_source
+    assert "batch-window-card-button" in component_source
+    assert "batch-card-open-indicator" in component_source
+    assert "batch-console-layout" in component_source
+    assert "task-detail-dock" in component_source
+    assert "Task Detail" in component_source
+    assert "Select a batch to view task details" in component_source
+    assert "Batch detail" not in component_source
+    assert "batch-task-board" not in component_source
+    assert "batch-task-card" not in component_source
+    assert "View detail" not in component_source
+    assert "openInitialBatchWindowFromLocation" in component_source
 
 
 def test_console_batches_assets_open_detail_in_panel() -> None:

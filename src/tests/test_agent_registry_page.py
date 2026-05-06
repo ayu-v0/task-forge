@@ -291,14 +291,14 @@ def test_agent_registry_reports_no_run_history_when_role_has_no_runs() -> None:
 def test_console_agent_registry_page_is_accessible() -> None:
     response = client.get("/console/agents")
     assert response.status_code == 200
-    assert "Agent Registry" in response.text
+    assert "Task Forge" in response.text
     assert "/console/vue/" in response.text
 
 
 def test_root_route_serves_agent_registry_home_page() -> None:
     response = client.get("/")
     assert response.status_code == 200
-    assert "Agent Registry" in response.text
+    assert "Task Forge" in response.text
     assert "/console/vue/" in response.text
 
 
@@ -314,6 +314,15 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert "isSideMenuOpen" in component_source
     assert "toggleSideMenu" in component_source
     assert "openRolesFromSideMenu" in component_source
+    assert "isBatchWindowOpen" in component_source
+    assert "openBatchWindow" in component_source
+    assert "closeBatchWindow" in component_source
+    assert "loadBatches" in component_source
+    assert "openBatchDetail" in component_source
+    assert "closeBatchTaskDetail" in component_source
+    assert "openInitialBatchWindowFromLocation" in component_source
+    assert "Task <span>Forge</span>" in component_source
+    assert "A black-purple command surface for routing visibility, role readiness, and agent lifecycle inspection." not in component_source
     assert "viewAgent(agent)" in component_source
     assert "fetch(`/agents/${encodeURIComponent(requestedAgentId)}`)" in component_source
     assert "editAgent(agent)" in component_source
@@ -340,6 +349,23 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert "Console navigation" in component_source
     assert "Expand console menu" in component_source
     assert "Batch Console" in component_source
+    assert '<button class="side-nav-item" type="button" @click="openBatchWindow()">Batch Console</button>' in component_source
+    assert 'href="/console/batches"' not in component_source
+    assert ':href="`/console/batches/${submittedBatchId}`"' not in component_source
+    assert "batch-window" in component_source
+    assert "Batch console" in component_source
+    assert "batch-window-card-button" in component_source
+    assert "batch-card-open-indicator" in component_source
+    assert 'aria-pressed="selectedBatchId === batch.batch_id"' in component_source
+    assert "batch-console-layout" in component_source
+    assert "task-detail-dock" in component_source
+    assert "Task Detail" in component_source
+    assert "Select a batch to view task details" in component_source
+    assert "Batch detail" not in component_source
+    assert "batch-task-board" not in component_source
+    assert "batch-task-card" not in component_source
+    assert "View detail" not in component_source
+    assert "This code task did not produce file-level deliverables." in component_source
     assert component_source.count("Open Agent Roles") == 1
     assert "hero-actions" not in component_source
     assert "keydown" in component_source
@@ -347,7 +373,12 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert "Success rate" in component_source
     assert "Avg latency" in component_source
     assert "Total cost estimate" in component_source
-    assert "Why no suitable role?" in component_source
+    assert "Routing diagnosis" not in component_source
+    assert "Why no suitable role?" not in component_source
+    assert "Enter a task type to inspect matching roles." not in component_source
+    assert "Task type diagnosis" not in component_source
+    assert "Diagnose" not in component_source
+    assert "command-bar" not in component_source
     assert "No run history" in component_source
 
 

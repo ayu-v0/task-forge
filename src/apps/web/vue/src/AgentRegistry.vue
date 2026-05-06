@@ -1,13 +1,11 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
-const taskType = ref("");
 const taskSubmitText = ref("");
 const submitMessage = ref("");
 const submittedBatchId = ref("");
 const statusText = ref("Loading agent registry...");
 const agents = ref([]);
-const diagnosis = ref(null);
 const loading = ref(false);
 const submitting = ref(false);
 const errorMessage = ref("");
@@ -27,6 +25,22 @@ const editError = ref("");
 const editMessage = ref("");
 const roleSearch = ref("");
 const statusFilter = ref("all");
+const isBatchWindowOpen = ref(false);
+const batchSearch = ref("");
+const batchStatusFilter = ref("");
+const batchSort = ref("created_at_desc");
+const batchStatusText = ref("Loading batches...");
+const batchLoading = ref(false);
+const batchError = ref("");
+const batches = ref([]);
+const selectedBatchId = ref("");
+const selectedBatchSummary = ref(null);
+const selectedTaskId = ref("");
+const selectedTaskTimelineItems = ref([]);
+
+let batchAbortController = null;
+let batchDetailAbortController = null;
+let taskTimelineAbortController = null;
 
 const enabledCount = computed(() => agents.value.filter((agent) => agent.enabled).length);
 const disabledCount = computed(() => agents.value.length - enabledCount.value);
@@ -53,10 +67,52 @@ const filteredAgents = computed(() => {
   });
 });
 
+const selectedBatchTask = computed(() => {
+  return selectedBatchSummary.value?.tasks?.find((task) => task.task_id === selectedTaskId.value) || null;
+});
+
+const selectedTaskArtifacts = computed(() => {
+  const allArtifacts = selectedBatchSummary.value?.artifacts || [];
+  const artifacts = selectedTaskId.value
+    ? allArtifacts.filter((artifact) => artifact.task_id === selectedTaskId.value)
+    : allArtifacts;
+  const hasStoredFileLevelDeliverable = artifacts.some((artifact) => ["code_file", "code_patch"].includes(artifact.artifact_type));
+  const displayArtifacts = hasStoredFileLevelDeliverable
+    ? artifacts
+    : [...inferCodeArtifactsFromJsonArtifacts(artifacts), ...artifacts];
+  return [...displayArtifacts].sort((left, right) => artifactPriority(left) - artifactPriority(right));
+});
+
+const selectedTaskMissingFileDeliverable = computed(() => {
+  const task = selectedBatchTask.value;
+  if (!task || !selectedTaskLooksLikeCode(task)) {
+    return false;
+  }
+  return !selectedTaskArtifacts.value.some((artifact) => ["code_file", "code_patch"].includes(artifact.artifact_type));
+});
+
 const statusOptions = [
   { value: "all", label: "All" },
   { value: "enabled", label: "Enabled" },
   { value: "disabled", label: "Disabled" },
+];
+
+const batchStatusOptions = [
+  { value: "", label: "All statuses" },
+  { value: "pending", label: "Pending" },
+  { value: "running", label: "Running" },
+  { value: "needs_review", label: "Needs review" },
+  { value: "success", label: "Success" },
+  { value: "failed", label: "Failed" },
+  { value: "cancelled", label: "Cancelled" },
+  { value: "partially_failed", label: "Partially failed" },
+];
+
+const batchSortOptions = [
+  { value: "created_at_desc", label: "Newest created" },
+  { value: "created_at_asc", label: "Oldest created" },
+  { value: "updated_at_desc", label: "Recently updated" },
+  { value: "updated_at_asc", label: "Least recently updated" },
 ];
 
 const promptBudgetHighlights = [
@@ -90,6 +146,225 @@ function formatCurrency(value) {
 function roleTaskTypes(agent) {
   const taskTypes = agent?.capability_declaration?.supported_task_types;
   return Array.isArray(taskTypes) && taskTypes.length ? taskTypes : ["No explicit task types"];
+}
+
+function formatDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value || "n/a";
+  }
+  return date.toLocaleString();
+}
+
+function hasObjectContent(value) {
+  return value && typeof value === "object" && Object.keys(value).length > 0;
+}
+
+function previewText(value, limit = 1200) {
+  const text = String(value ?? "");
+  return text.length <= limit ? text : `${text.slice(0, limit)}...`;
+}
+
+function lineCount(value) {
+  const text = String(value ?? "");
+  return text ? text.split(/\r?\n/).length : 0;
+}
+
+function generatedPathForLanguage(taskId, language) {
+  const extensions = {
+    python: ".py",
+    py: ".py",
+    javascript: ".js",
+    js: ".js",
+    typescript: ".ts",
+    ts: ".ts",
+    go: ".go",
+    golang: ".go",
+    powershell: ".ps1",
+    ps1: ".ps1",
+    shell: ".sh",
+    sh: ".sh",
+  };
+  const normalizedLanguage = String(language || "text").trim().toLowerCase();
+  return `generated/${taskId || "task"}${extensions[normalizedLanguage] || ".txt"}`;
+}
+
+function contentTypeForLanguage(language) {
+  const contentTypes = {
+    python: "text/x-python",
+    py: "text/x-python",
+    javascript: "text/javascript",
+    js: "text/javascript",
+    typescript: "text/typescript",
+    ts: "text/typescript",
+    go: "text/x-go",
+    golang: "text/x-go",
+    powershell: "text/x-powershell",
+    ps1: "text/x-powershell",
+    shell: "text/x-shellscript",
+    sh: "text/x-shellscript",
+  };
+  return contentTypes[String(language || "").trim().toLowerCase()] || "text/plain";
+}
+
+function findLegacyCodeResult(value, depth = 0) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  if (typeof value.code === "string" && value.code.trim()) {
+    return value;
+  }
+  if (depth >= 3) {
+    return null;
+  }
+  for (const key of ["result", "output", "artifact"]) {
+    const found = findLegacyCodeResult(value[key], depth + 1);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+function inferCodeArtifactsFromJsonArtifacts(artifacts) {
+  return artifacts
+    .filter((artifact) => artifact.artifact_type === "json")
+    .map((artifact) => {
+      const codeResult = findLegacyCodeResult(artifact.raw_content || artifact.structured_output || {});
+      if (!codeResult) {
+        return null;
+      }
+      const language = String(codeResult.language || "text").trim().toLowerCase() || "text";
+      const path = String(
+        codeResult.path ||
+        codeResult.file_path ||
+        codeResult.filename ||
+        generatedPathForLanguage(artifact.task_id, language),
+      ).replaceAll("\\", "/");
+      const content = codeResult.code;
+      return {
+        ...artifact,
+        artifact_id: `${artifact.artifact_id || artifact.run_id || "artifact"}:inferred-code-file`,
+        artifact_type: "code_file",
+        uri: `workspace://${path}`,
+        content_type: contentTypeForLanguage(language),
+        raw_content: { path, content },
+        summary: { path, language, change_type: "generated" },
+        structured_output: {
+          path,
+          language,
+          change_type: "generated",
+          line_count: lineCount(content),
+          content_preview: previewText(content),
+          inferred_from: artifact.artifact_id,
+        },
+        metadata: {
+          ...(artifact.metadata || {}),
+          artifact_role: "final_deliverable",
+          inferred_from_artifact_type: "json",
+        },
+      };
+    })
+    .filter(Boolean);
+}
+
+function selectedTaskLooksLikeCode(task) {
+  if (!task) {
+    return false;
+  }
+  const haystack = `${task.task_type || ""} ${task.title || ""} ${task.description || ""}`.toLowerCase();
+  return [
+    "code",
+    "implement",
+    "fix",
+    "bug",
+    "test",
+    "refactor",
+    "script",
+    "config",
+    "代码",
+    "实现",
+    "修复",
+    "测试",
+    "脚本",
+    "配置",
+  ].some((keyword) => haystack.includes(keyword));
+}
+
+function artifactPriority(artifact) {
+  const priorities = {
+    code_file: 0,
+    code_patch: 1,
+    test_report: 2,
+    document: 3,
+    analysis_report: 4,
+    data_file: 5,
+    generic_result: 8,
+    json: 9,
+  };
+  return priorities[artifact.artifact_type] ?? 6;
+}
+
+function flowStageLabel(stage) {
+  const labels = {
+    created: "Created",
+    routed: "Routed",
+    queued: "Queued",
+    blocked: "Blocked",
+    running: "Running",
+    completed: "Completed",
+    failed: "Failed",
+    cancelled: "Cancelled",
+    review: "Review",
+    retry: "Retry",
+    status: "Status",
+  };
+  return labels[stage] || stage || "Status";
+}
+
+function artifactTitle(artifact) {
+  const summary = artifact.summary || {};
+  const rawContent = artifact.raw_content || {};
+  if (artifact.artifact_type === "code_file") {
+    return summary.path || rawContent.path || "Code file";
+  }
+  if (artifact.artifact_type === "code_patch") {
+    return "Code patch";
+  }
+  if (artifact.artifact_type === "test_report") {
+    return "Test report";
+  }
+  return summary.title || rawContent.title || artifact.artifact_type || "Artifact";
+}
+
+function artifactPreview(artifact) {
+  const summary = artifact.summary || {};
+  const structuredOutput = artifact.structured_output || {};
+  const rawContent = artifact.raw_content || {};
+  if (artifact.artifact_type === "code_file") {
+    return structuredOutput.content_preview || previewText(rawContent.content || "");
+  }
+  if (artifact.artifact_type === "code_patch") {
+    return structuredOutput.diff_preview || previewText(rawContent.diff || "");
+  }
+  if (artifact.artifact_type === "test_report") {
+    return structuredOutput.output_preview || previewText(rawContent.output || "");
+  }
+  return structuredOutput.content_preview || previewText(rawContent.content || JSON.stringify(summary || {}, null, 2));
+}
+
+function fullArtifactContent(artifact) {
+  const rawContent = artifact.raw_content || {};
+  if (artifact.artifact_type === "code_file") {
+    return rawContent.content || "";
+  }
+  if (artifact.artifact_type === "code_patch") {
+    return rawContent.diff || "";
+  }
+  if (artifact.artifact_type === "test_report") {
+    return rawContent.output || "";
+  }
+  return hasObjectContent(rawContent) ? JSON.stringify(rawContent, null, 2) : "";
 }
 
 function openDrawer() {
@@ -131,6 +406,184 @@ function closeRoleEdit() {
   editSaving.value = false;
   editError.value = "";
   editMessage.value = "";
+}
+
+function abortBatchRequests() {
+  if (batchAbortController) {
+    batchAbortController.abort();
+    batchAbortController = null;
+  }
+  if (batchDetailAbortController) {
+    batchDetailAbortController.abort();
+    batchDetailAbortController = null;
+  }
+  if (taskTimelineAbortController) {
+    taskTimelineAbortController.abort();
+    taskTimelineAbortController = null;
+  }
+}
+
+async function openBatchWindow(batchId = "") {
+  closeSideMenu();
+  closeDrawer();
+  closeRoleDetail();
+  closeRoleEdit();
+  isBatchWindowOpen.value = true;
+  batchError.value = "";
+  document.body.classList.add("modal-locked");
+  await loadBatches();
+  if (batchId) {
+    await openBatchDetail(batchId);
+  }
+}
+
+function closeBatchWindow() {
+  abortBatchRequests();
+  isBatchWindowOpen.value = false;
+  selectedBatchId.value = "";
+  selectedBatchSummary.value = null;
+  selectedTaskId.value = "";
+  selectedTaskTimelineItems.value = [];
+  document.body.classList.remove("modal-locked");
+}
+
+async function loadBatches() {
+  if (batchAbortController) {
+    batchAbortController.abort();
+  }
+  batchAbortController = new AbortController();
+
+  const params = new URLSearchParams();
+  if (batchSearch.value.trim()) {
+    params.set("search", batchSearch.value.trim());
+  }
+  if (batchStatusFilter.value) {
+    params.set("status", batchStatusFilter.value);
+  }
+  params.set("sort", batchSort.value);
+
+  batchLoading.value = true;
+  batchError.value = "";
+  batchStatusText.value = "Loading batches...";
+
+  try {
+    const response = await fetch(`/task-batches?${params.toString()}`, {
+      signal: batchAbortController.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`);
+    }
+    const payload = await response.json();
+    batches.value = payload.items || [];
+    batchStatusText.value = `${batches.value.length} batch${batches.value.length === 1 ? "" : "es"} shown`;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
+    batches.value = [];
+    batchError.value = error.message || "Unable to load batches.";
+    batchStatusText.value = "Unable to load batches.";
+  } finally {
+    batchLoading.value = false;
+  }
+}
+
+async function openBatchDetail(batchId) {
+  if (batchDetailAbortController) {
+    batchDetailAbortController.abort();
+  }
+  if (taskTimelineAbortController) {
+    taskTimelineAbortController.abort();
+    taskTimelineAbortController = null;
+  }
+  batchDetailAbortController = new AbortController();
+
+  selectedBatchId.value = batchId;
+  selectedBatchSummary.value = null;
+  selectedTaskId.value = "";
+  selectedTaskTimelineItems.value = [];
+  batchError.value = "";
+
+  try {
+    const response = await fetch(`/task-batches/${encodeURIComponent(batchId)}/summary`, {
+      signal: batchDetailAbortController.signal,
+    });
+    if (response.status === 404) {
+      throw new Error("Batch not found.");
+    }
+    if (!response.ok) {
+      throw new Error(`Summary request failed with status ${response.status}`);
+    }
+    const summary = await response.json();
+    if (selectedBatchId.value !== batchId) {
+      return;
+    }
+    selectedBatchSummary.value = summary;
+    const firstTask = summary.tasks?.[0];
+    if (firstTask) {
+      selectedTaskId.value = firstTask.task_id;
+      await loadSelectedTaskTimeline(firstTask);
+    }
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
+    batchError.value = error.message || "Unable to load batch detail.";
+  }
+}
+
+function closeBatchTaskDetail() {
+  if (taskTimelineAbortController) {
+    taskTimelineAbortController.abort();
+    taskTimelineAbortController = null;
+  }
+  selectedTaskId.value = "";
+  selectedTaskTimelineItems.value = [];
+}
+
+async function loadSelectedTaskTimeline(task) {
+  if (taskTimelineAbortController) {
+    taskTimelineAbortController.abort();
+  }
+  taskTimelineAbortController = new AbortController();
+
+  try {
+    const response = await fetch(`/tasks/${encodeURIComponent(task.task_id)}/timeline`, {
+      signal: taskTimelineAbortController.signal,
+    });
+    if (response.status === 404) {
+      throw new Error("Task timeline not found.");
+    }
+    if (!response.ok) {
+      throw new Error(`Task timeline request failed with status ${response.status}`);
+    }
+    const payload = await response.json();
+    if (selectedTaskId.value === task.task_id) {
+      selectedTaskTimelineItems.value = payload.items || [];
+    }
+  } catch (error) {
+    if (error.name === "AbortError" || selectedTaskId.value !== task.task_id) {
+      return;
+    }
+    batchError.value = error.message || "Unable to load task flow.";
+  }
+}
+
+function openInitialBatchWindowFromLocation() {
+  const path = window.location.pathname;
+  if (path === "/console/batches") {
+    openBatchWindow();
+    return;
+  }
+  const match = path.match(/^\/console\/batches\/([^/]+)$/);
+  if (match) {
+    openBatchWindow(decodeURIComponent(match[1]));
+    return;
+  }
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("window") === "batches") {
+    openBatchWindow(params.get("batch_id") || "");
+  }
 }
 
 function formatJson(value) {
@@ -277,6 +730,10 @@ function handleKeydown(event) {
   if (event.key !== "Escape") {
     return;
   }
+  if (isBatchWindowOpen.value) {
+    closeBatchWindow();
+    return;
+  }
   if (isRoleDetailOpen.value) {
     closeRoleDetail();
     return;
@@ -328,7 +785,7 @@ async function submitTaskBatch() {
     return;
   }
 
-  const normalizedTaskType = taskType.value.trim() || "planner_preprocess";
+  const normalizedTaskType = "planner_preprocess";
   submitting.value = true;
   submitMessage.value = "Submitting task batch...";
   submittedBatchId.value = "";
@@ -347,7 +804,6 @@ async function submitTaskBatch() {
     const payload = await response.json();
     submittedBatchId.value = payload.batch_id;
     submitMessage.value = `Submitted ${payload.normalized_task_count} task(s) as a new batch.`;
-    taskType.value = normalizedTaskType;
     await loadRegistry();
   } catch (error) {
     submitMessage.value = error.message || "Unable to submit task batch.";
@@ -357,29 +813,20 @@ async function submitTaskBatch() {
 }
 
 async function loadRegistry() {
-  const params = new URLSearchParams();
-  const normalizedTaskType = taskType.value.trim();
-  if (normalizedTaskType) {
-    params.set("task_type", normalizedTaskType);
-  }
-
   loading.value = true;
   errorMessage.value = "";
   statusText.value = "Loading agent registry...";
 
   try {
-    const query = params.toString();
-    const response = await fetch(`/agents/registry${query ? `?${query}` : ""}`);
+    const response = await fetch("/agents/registry");
     if (!response.ok) {
       throw new Error(`Request failed with status ${response.status}`);
     }
     const payload = await response.json();
     agents.value = payload.items || [];
-    diagnosis.value = payload.diagnosis || null;
     statusText.value = `${agents.value.length} role${agents.value.length === 1 ? "" : "s"} loaded`;
   } catch (error) {
     agents.value = [];
-    diagnosis.value = null;
     errorMessage.value = error.message || "Unable to load agent registry.";
     statusText.value = "Unable to load agent registry.";
   } finally {
@@ -394,11 +841,13 @@ watch(isDrawerOpen, (open) => {
 onMounted(() => {
   window.addEventListener("keydown", handleKeydown);
   loadRegistry();
+  openInitialBatchWindowFromLocation();
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleKeydown);
   document.body.classList.remove("drawer-locked");
+  document.body.classList.remove("modal-locked");
 });
 </script>
 
@@ -416,7 +865,7 @@ onBeforeUnmount(() => {
         Menu
       </button>
       <div v-if="isSideMenuOpen" id="console-side-nav-list" class="side-nav-list">
-        <a class="side-nav-item" href="/console/batches">Batch Console</a>
+        <button class="side-nav-item" type="button" @click="openBatchWindow()">Batch Console</button>
         <button class="side-nav-item" type="button" @click="openRolesFromSideMenu">Open Agent Roles</button>
       </div>
     </nav>
@@ -426,10 +875,7 @@ onBeforeUnmount(() => {
       <div class="hero-orb hero-orb-two"></div>
       <div class="hero-copy">
         <p class="eyebrow">AI Agent Control Center</p>
-        <h1>Agent <span>Registry</span></h1>
-        <p class="subtitle">
-          A black-purple command surface for routing visibility, role readiness, and agent lifecycle inspection.
-        </p>
+        <h1>Task <span>Forge</span></h1>
       </div>
       <!-- Legacy test markers retained for the pre-upgrade test suite: Agent角色管理 / 角色列表 -->
     </section>
@@ -449,23 +895,16 @@ onBeforeUnmount(() => {
         </button>
         <p v-if="submitMessage" class="submit-message">
           {{ submitMessage }}
-          <a v-if="submittedBatchId" :href="`/console/batches/${submittedBatchId}`">Open batch</a>
+          <button
+            v-if="submittedBatchId"
+            class="inline-link-button"
+            type="button"
+            @click="openBatchWindow(submittedBatchId)"
+          >
+            Open batch
+          </button>
         </p>
       </div>
-    </section>
-
-    <section class="command-bar" aria-label="Registry controls">
-      <label class="field">
-        <span>Task type diagnosis</span>
-        <input
-          v-model="taskType"
-          type="search"
-          placeholder="planner_preprocess"
-          @keydown.enter="loadRegistry"
-        >
-      </label>
-      <button class="primary-button slim" type="button" :disabled="loading" @click="loadRegistry">Diagnose</button>
-      <button class="ghost-button" type="button" :disabled="loading" @click="loadRegistry">Refresh</button>
     </section>
 
     <section class="status-line" aria-live="polite">
@@ -485,42 +924,6 @@ onBeforeUnmount(() => {
             <dd>{{ value }}</dd>
           </div>
         </dl>
-      </article>
-
-      <article class="panel diagnosis-panel">
-        <p class="section-label">Routing diagnosis</p>
-        <h2>Why no suitable role?</h2>
-        <div v-if="diagnosis" class="diagnosis-card" :class="`diagnosis-${diagnosis.status}`">
-          <p class="diagnosis-status">{{ diagnosis.status }}</p>
-          <p class="diagnosis-message">{{ diagnosis.message }}</p>
-          <div class="diagnosis-group">
-            <strong>Enabled matches</strong>
-            <div class="pill-row">
-              <span
-                v-for="role in diagnosis.matching_enabled_roles"
-                :key="role"
-                class="meta-pill"
-              >
-                {{ role }}
-              </span>
-              <span v-if="!diagnosis.matching_enabled_roles.length" class="muted">None</span>
-            </div>
-          </div>
-          <div class="diagnosis-group">
-            <strong>Disabled matches</strong>
-            <div class="pill-row">
-              <span
-                v-for="role in diagnosis.matching_disabled_roles"
-                :key="role"
-                class="meta-pill disabled"
-              >
-                {{ role }}
-              </span>
-              <span v-if="!diagnosis.matching_disabled_roles.length" class="muted">None</span>
-            </div>
-          </div>
-        </div>
-        <div v-else class="empty-panel">Enter a task type to inspect matching roles.</div>
       </article>
     </section>
 
@@ -796,6 +1199,206 @@ onBeforeUnmount(() => {
         </section>
       </aside>
     </Transition>
+
+    <Transition name="fade">
+      <button
+        v-if="isBatchWindowOpen"
+        class="batch-window-overlay"
+        type="button"
+        aria-label="Close batch console"
+        @click="closeBatchWindow"
+      ></button>
+    </Transition>
+
+    <Transition name="modal">
+      <div
+        v-if="isBatchWindowOpen"
+        class="batch-console-layout"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="batch-window-title"
+      >
+        <section
+          class="batch-window"
+        >
+          <header class="batch-window-header">
+            <div>
+              <p class="section-label">Batch console</p>
+              <h2 id="batch-window-title">Batches</h2>
+            </div>
+            <button class="icon-button" type="button" aria-label="Close batch console" @click="closeBatchWindow">x</button>
+          </header>
+
+          <section class="batch-window-toolbar" aria-label="Batch filters">
+            <label class="field">
+              <span>Search</span>
+              <input v-model="batchSearch" type="search" placeholder="Find batch by title" @input="loadBatches">
+            </label>
+            <label class="field">
+              <span>Status</span>
+              <select v-model="batchStatusFilter" @change="loadBatches">
+                <option v-for="option in batchStatusOptions" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Sort</span>
+              <select v-model="batchSort" @change="loadBatches">
+                <option v-for="option in batchSortOptions" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+            <button class="primary-button compact" type="button" :disabled="batchLoading" @click="loadBatches">
+              {{ batchLoading ? "Loading" : "Refresh" }}
+            </button>
+          </section>
+
+          <section class="batch-status-line" aria-live="polite">
+            <span :class="{ pulse: batchLoading }"></span>
+            <p>{{ batchStatusText }}</p>
+          </section>
+
+          <p v-if="batchError" class="error-banner batch-error">{{ batchError }}</p>
+
+          <section class="batch-window-body">
+            <aside class="batch-window-list" aria-label="Task batches">
+              <article v-if="!batches.length && !batchLoading" class="batch-empty-state">
+                No batches matched the current filters.
+              </article>
+
+            <button
+              v-for="batch in batches"
+              :key="batch.batch_id"
+              class="batch-window-card batch-window-card-button"
+              :class="{ selected: selectedBatchId === batch.batch_id }"
+              type="button"
+              :aria-pressed="selectedBatchId === batch.batch_id"
+              @click="openBatchDetail(batch.batch_id)"
+            >
+              <span class="batch-card-head">
+                <span class="batch-card-title-block">
+                  <strong class="batch-card-title">{{ batch.title }}</strong>
+                  <small class="batch-card-id">{{ batch.batch_id }}</small>
+                </span>
+                <span class="status-badge" :class="`status-${batch.derived_status}`">
+                  {{ batch.derived_status }}
+                </span>
+              </span>
+              <span class="batch-card-metrics" aria-label="Batch metrics">
+                <span><small>Total</small><strong>{{ batch.total_tasks }}</strong></span>
+                <span><small>Done</small><strong>{{ batch.completed_count }}</strong></span>
+                <span><small>Success</small><strong>{{ batch.success_rate }}%</strong></span>
+              </span>
+              <span class="batch-card-footer">
+                <small>Updated {{ formatDate(batch.updated_at) }}</small>
+                <span class="batch-card-open-indicator" aria-hidden="true">&gt;</span>
+              </span>
+            </button>
+            </aside>
+          </section>
+        </section>
+        <aside class="task-detail-dock" aria-label="Task Detail">
+          <header class="task-detail-dock-header">
+            <div>
+              <p class="section-label">Task Detail</p>
+              <h2>{{ selectedBatchTask?.title || "Task Detail" }}</h2>
+            </div>
+            <button
+              v-if="selectedBatchTask"
+              class="icon-button"
+              type="button"
+              aria-label="Clear task detail"
+              @click="closeBatchTaskDetail"
+            >
+              x
+            </button>
+          </header>
+
+          <section v-if="selectedBatchId && !selectedBatchSummary" class="task-detail-empty">
+            Loading task details...
+          </section>
+
+          <section v-else-if="selectedBatchSummary && !selectedBatchTask" class="task-detail-empty">
+            Selected batch has no tasks
+          </section>
+
+          <section v-else-if="!selectedBatchTask" class="task-detail-empty">
+            Select a batch to view task details
+          </section>
+
+          <section v-else class="task-detail-dock-body">
+            <section class="batch-detail-section">
+              <div class="batch-section-heading">
+                <p class="section-label">Task flow</p>
+                <h4>{{ selectedBatchTask.task_type || "Task" }}</h4>
+              </div>
+              <article v-if="!selectedTaskTimelineItems.length" class="batch-detail-state">No flow events available yet.</article>
+              <div v-else class="batch-flow-list">
+                <article
+                  v-for="item in selectedTaskTimelineItems"
+                  :key="`${item.stage}-${item.timestamp}-${item.run_id || ''}`"
+                  class="batch-flow-step"
+                  :class="item.stage || 'status'"
+                >
+                  <div class="batch-flow-marker"></div>
+                  <div class="batch-flow-card">
+                    <div class="batch-flow-card-head">
+                      <strong>{{ flowStageLabel(item.stage) }}</strong>
+                      <span>{{ formatDate(item.timestamp) }}</span>
+                    </div>
+                    <h5>{{ item.title }}</h5>
+                    <p>{{ item.detail || "No additional detail." }}</p>
+                    <div class="batch-flow-meta">
+                      <span>actor {{ item.actor || "system" }}</span>
+                      <span>run {{ item.run_id || "n/a" }}</span>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="batch-detail-section">
+              <div class="batch-section-heading">
+                <p class="section-label">Deliverables</p>
+                <h4>Selected task outputs</h4>
+              </div>
+              <article v-if="selectedTaskMissingFileDeliverable" class="batch-detail-state warning">
+                This code task did not produce file-level deliverables.
+              </article>
+              <article v-if="!selectedTaskArtifacts.length" class="batch-detail-state">
+                No deliverables for the selected task.
+              </article>
+              <article
+                v-for="artifact in selectedTaskArtifacts"
+                :key="artifact.artifact_id || `${artifact.task_id}-${artifact.run_id}-${artifact.artifact_type}`"
+                class="batch-artifact-card"
+              >
+                <div class="batch-artifact-head">
+                  <strong>{{ artifactTitle(artifact) }}</strong>
+                  <span>{{ artifact.content_type || artifact.artifact_type || "unknown" }}</span>
+                </div>
+                <p class="batch-artifact-meta">
+                  {{ artifact.uri || "No URI" }} /
+                  task {{ artifact.task_id || "n/a" }} /
+                  run {{ artifact.run_id || "n/a" }}
+                </p>
+                <pre v-if="artifactPreview(artifact)">{{ artifactPreview(artifact) }}</pre>
+                <details v-if="fullArtifactContent(artifact)" class="batch-artifact-full">
+                  <summary>Full content</summary>
+                  <pre>{{ fullArtifactContent(artifact) }}</pre>
+                </details>
+                <details class="batch-artifact-full">
+                  <summary>Structured output</summary>
+                  <pre>{{ formatJson(artifact.structured_output) }}</pre>
+                </details>
+              </article>
+            </section>
+          </section>
+        </aside>
+      </div>
+    </Transition>
   </main>
 </template>
 
@@ -820,6 +1423,10 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+:global(body.modal-locked) {
+  overflow: hidden;
+}
+
 button,
 input,
 select,
@@ -837,6 +1444,8 @@ button:disabled {
 }
 
 .registry-shell {
+  --side-nav-offset: clamp(-280px, calc((1280px - 100vw) / 2), 0px);
+
   position: relative;
   isolation: isolate;
   display: grid;
@@ -872,11 +1481,12 @@ button:disabled {
 
 .hero-panel,
 .task-submit-panel,
-.command-bar,
 .panel,
 .role-drawer,
 .role-side-panel,
-.console-side-nav {
+.console-side-nav,
+.batch-window,
+.task-detail-dock {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(18, 18, 24, 0.82);
   backdrop-filter: blur(18px);
@@ -958,15 +1568,19 @@ p {
 
 h1 {
   max-width: 780px;
-  margin-bottom: 18px;
+  margin-bottom: 12px;
+  padding: 0.04em 0.12em 0.16em 0;
+  overflow: visible;
   color: #f8fafc;
   font-size: clamp(3.2rem, 8vw, 7.4rem);
-  line-height: 0.86;
-  letter-spacing: -0.085em;
+  line-height: 1.16;
+  letter-spacing: 0;
 }
 
 h1 span {
   display: inline-block;
+  padding: 0.04em 0.12em 0.14em 0;
+  overflow: visible;
   background: linear-gradient(135deg, #f8fafc 0%, #c4b5fd 38%, #8b5cf6 78%, #6366f1 100%);
   background-clip: text;
   color: transparent;
@@ -1012,6 +1626,7 @@ h3 {
 .primary-button,
 .ghost-button,
 .ghost-link,
+.inline-link-button,
 .role-actions button,
 .icon-button,
 .side-nav-toggle,
@@ -1047,6 +1662,7 @@ h3 {
 
 .ghost-button,
 .ghost-link,
+.inline-link-button,
 .role-actions button,
 .icon-button,
 .side-nav-toggle,
@@ -1061,9 +1677,20 @@ h3 {
   color: #cbd5e1;
 }
 
+.inline-link-button {
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  color: #c4b5fd;
+  font-size: inherit;
+  font-weight: 800;
+  padding: 0;
+}
+
 .primary-button:hover,
 .ghost-button:hover,
 .ghost-link:hover,
+.inline-link-button:hover,
 .role-actions button:hover,
 .icon-button:hover,
 .side-nav-toggle:hover,
@@ -1090,6 +1717,8 @@ h3 {
   padding: 8px;
   overflow: hidden;
   border-radius: 22px;
+  transform: translateX(var(--side-nav-offset));
+  transition: transform 180ms ease, border-color 160ms ease, box-shadow 160ms ease;
   background:
     radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.2), transparent 44%),
     rgba(18, 18, 24, 0.84);
@@ -1194,15 +1823,6 @@ h3 {
   text-decoration: none;
 }
 
-.command-bar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 12px;
-  margin-top: 18px;
-  padding: 14px;
-  border-radius: 22px;
-}
-
 .field {
   display: grid;
   gap: 8px;
@@ -1286,7 +1906,7 @@ h3 {
 
 .overview-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
 }
 
@@ -1342,63 +1962,6 @@ dd {
   font-weight: 800;
 }
 
-.diagnosis-card {
-  position: relative;
-  margin-top: 18px;
-  border: 1px solid rgba(139, 92, 246, 0.22);
-  border-left: 3px solid #8b5cf6;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.04);
-  padding: 16px;
-  overflow: hidden;
-}
-
-.diagnosis-card::before {
-  position: absolute;
-  inset: -40% auto auto -20%;
-  width: 180px;
-  height: 180px;
-  border-radius: 999px;
-  background: radial-gradient(circle, rgba(139, 92, 246, 0.18), transparent 68%);
-  content: "";
-}
-
-.diagnosis-matched_enabled {
-  border-left-color: #8b5cf6;
-}
-
-.diagnosis-matched_disabled_only {
-  border-left-color: #f59e0b;
-}
-
-.diagnosis-no_match {
-  border-left-color: #f43f5e;
-}
-
-.diagnosis-status {
-  position: relative;
-  color: #a78bfa;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.diagnosis-message {
-  position: relative;
-  color: #cbd5e1;
-  line-height: 1.6;
-}
-
-.diagnosis-group {
-  position: relative;
-  color: #f8fafc;
-}
-
-.diagnosis-group + .diagnosis-group {
-  margin-top: 16px;
-}
-
 .pill-row {
   margin-top: 10px;
 }
@@ -1431,6 +1994,460 @@ dd {
   border: 1px solid rgba(167, 139, 250, 0.34);
   background: rgba(139, 92, 246, 0.14);
   color: #ddd6fe;
+}
+
+.status-success {
+  border: 1px solid rgba(167, 139, 250, 0.34);
+  background: rgba(139, 92, 246, 0.14);
+  color: #ddd6fe;
+}
+
+.status-failed,
+.status-partially_failed {
+  border: 1px solid rgba(251, 113, 133, 0.34);
+  background: rgba(244, 63, 94, 0.12);
+  color: #fb7185;
+}
+
+.status-running {
+  border: 1px solid rgba(147, 197, 253, 0.34);
+  background: rgba(59, 130, 246, 0.13);
+  color: #93c5fd;
+}
+
+.status-needs_review {
+  border: 1px solid rgba(251, 191, 36, 0.34);
+  background: rgba(245, 158, 11, 0.13);
+  color: #fbbf24;
+}
+
+.status-pending,
+.status-cancelled {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+}
+
+.batch-window-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  border: 0;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(139, 92, 246, 0.16), transparent 34%),
+    rgba(0, 0, 0, 0.72);
+}
+
+.batch-console-layout {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: minmax(360px, 520px) clamp(420px, 30vw, 520px);
+  gap: 24px;
+  width: min(1064px, calc(100vw - 40px));
+  height: min(760px, calc(100vh - 40px));
+  min-width: 0;
+  transform: translate(-50%, -50%);
+}
+
+.batch-window {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border-color: rgba(167, 139, 250, 0.34);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 32% 0%, rgba(139, 92, 246, 0.18), transparent 38%),
+    rgba(12, 12, 18, 0.97);
+  box-shadow:
+    0 32px 100px rgba(0, 0, 0, 0.62),
+    0 0 44px rgba(139, 92, 246, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.task-detail-dock {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border-color: rgba(167, 139, 250, 0.34);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 26% 0%, rgba(139, 92, 246, 0.18), transparent 38%),
+    rgba(12, 12, 18, 0.97);
+  box-shadow:
+    0 32px 100px rgba(0, 0, 0, 0.5),
+    0 0 44px rgba(139, 92, 246, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.task-detail-dock-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.task-detail-dock-header h2 {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.task-detail-dock-body {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.task-detail-empty {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  color: #94a3b8;
+  line-height: 1.5;
+  padding: 24px;
+  text-align: center;
+}
+
+.batch-window-header,
+.batch-window-toolbar {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.batch-window-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.batch-window-header h2 {
+  margin-top: 4px;
+}
+
+.batch-window-toolbar {
+  grid-template-columns: minmax(0, 1.3fr) minmax(150px, 0.8fr) minmax(180px, 0.9fr) auto;
+  align-items: end;
+}
+
+.batch-status-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  color: #94a3b8;
+  padding: 0 16px;
+}
+
+.batch-status-line p {
+  margin: 0;
+}
+
+.batch-status-line span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #a78bfa;
+  box-shadow: 0 0 18px rgba(167, 139, 250, 0.8);
+}
+
+.batch-error {
+  margin: 0 16px 12px;
+}
+
+.batch-window-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 16px 16px;
+}
+
+.batch-window-list {
+  min-height: 0;
+  overflow: auto;
+}
+
+.batch-window-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.batch-window-card,
+.batch-empty-state,
+.batch-detail-state,
+.batch-detail-section,
+.batch-artifact-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 12px;
+}
+
+.batch-window-card {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  overflow: hidden;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.batch-window-card-button {
+  width: 100%;
+  min-height: 156px;
+  color: #f8fafc;
+  text-align: left;
+  padding: 14px 14px 12px 16px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.025)),
+    rgba(255, 255, 255, 0.035);
+}
+
+.batch-window-card-button:hover,
+.batch-window-card-button:focus-visible {
+  border-color: rgba(167, 139, 250, 0.58);
+  background:
+    linear-gradient(135deg, rgba(139, 92, 246, 0.13), rgba(255, 255, 255, 0.04)),
+    rgba(255, 255, 255, 0.045);
+  box-shadow: 0 0 26px rgba(139, 92, 246, 0.14);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.batch-window-card-button:focus-visible {
+  box-shadow:
+    0 0 0 3px rgba(196, 181, 253, 0.22),
+    0 0 26px rgba(139, 92, 246, 0.14);
+}
+
+.batch-window-card-button.selected {
+  border-color: rgba(167, 139, 250, 0.72);
+  background:
+    linear-gradient(90deg, rgba(139, 92, 246, 0.18), rgba(255, 255, 255, 0.045) 44%),
+    rgba(139, 92, 246, 0.08);
+  box-shadow:
+    inset 3px 0 0 rgba(167, 139, 250, 0.88),
+    0 0 28px rgba(139, 92, 246, 0.13);
+}
+
+.batch-card-head,
+.batch-card-footer,
+.batch-artifact-head,
+.batch-flow-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.batch-card-title-block {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.batch-card-title {
+  color: #f8fafc;
+  font-size: 0.98rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.batch-card-id,
+.batch-card-footer small,
+.batch-card-metrics small,
+.batch-artifact-meta {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.batch-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.batch-card-metrics span {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  padding: 9px;
+}
+
+.batch-card-metrics strong {
+  display: block;
+  margin-top: 5px;
+  color: #f8fafc;
+  font-size: 0.98rem;
+}
+
+.batch-card-open-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(167, 139, 250, 0.26);
+  border-radius: 999px;
+  background: rgba(139, 92, 246, 0.1);
+  color: #ddd6fe;
+  font-size: 1.15rem;
+  line-height: 1;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.batch-window-card-button:hover .batch-card-open-indicator,
+.batch-window-card-button:focus-visible .batch-card-open-indicator,
+.batch-window-card-button.selected .batch-card-open-indicator {
+  border-color: rgba(196, 181, 253, 0.62);
+  background: rgba(139, 92, 246, 0.22);
+  transform: translateX(2px);
+}
+
+.batch-detail-section {
+  display: grid;
+  gap: 12px;
+}
+
+.batch-section-heading h4 {
+  margin: 4px 0 0;
+}
+
+.batch-flow-list,
+.batch-artifact-full {
+  display: grid;
+  gap: 10px;
+}
+
+.batch-flow-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.batch-flow-step::before {
+  position: absolute;
+  top: 16px;
+  bottom: -14px;
+  left: 8px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  content: "";
+}
+
+.batch-flow-step:last-child::before {
+  display: none;
+}
+
+.batch-flow-marker {
+  position: relative;
+  z-index: 1;
+  width: 17px;
+  height: 17px;
+  margin-top: 12px;
+  border: 3px solid rgba(167, 139, 250, 0.72);
+  border-radius: 999px;
+  background: #0c0c12;
+  box-shadow: 0 0 18px rgba(139, 92, 246, 0.4);
+}
+
+.batch-flow-card {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 10px;
+}
+
+.batch-flow-card-head,
+.batch-flow-meta,
+.batch-artifact-head span {
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.batch-flow-card h5 {
+  margin: 8px 0 6px;
+  color: #f8fafc;
+}
+
+.batch-flow-card p,
+.batch-flow-meta {
+  margin: 0;
+  color: #94a3b8;
+  line-height: 1.45;
+}
+
+.batch-flow-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.batch-artifact-card {
+  display: grid;
+  gap: 10px;
+}
+
+.batch-artifact-head strong {
+  overflow-wrap: anywhere;
+}
+
+.batch-artifact-card pre,
+.batch-artifact-full pre {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  color: #dbeafe;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.batch-artifact-full summary {
+  cursor: pointer;
+  color: #ddd6fe;
+  font-weight: 800;
+}
+
+.batch-detail-state {
+  color: #94a3b8;
+}
+
+.batch-detail-state.warning {
+  border-color: rgba(251, 191, 36, 0.34);
+  background: rgba(251, 191, 36, 0.1);
+  color: #fbbf24;
 }
 
 .drawer-overlay {
@@ -1822,7 +2839,9 @@ dd {
 .fade-enter-active,
 .fade-leave-active,
 .slide-enter-active,
-.slide-leave-active {
+.slide-leave-active,
+.modal-enter-active,
+.modal-leave-active {
   transition: opacity 180ms ease, transform 220ms ease;
 }
 
@@ -1835,6 +2854,12 @@ dd {
 .slide-leave-to {
   opacity: 0;
   transform: translateX(36px);
+}
+
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -48%) scale(0.98);
 }
 
 @keyframes pulse {
@@ -1861,6 +2886,7 @@ dd {
     top: 14px;
     left: 10px;
     width: 64px;
+    transform: none;
   }
 
   .console-side-nav.expanded {
@@ -1874,6 +2900,19 @@ dd {
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .batch-window-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .batch-window-body {
+    grid-template-columns: 1fr;
+  }
+
+  .batch-console-layout {
+    grid-template-columns: minmax(320px, 1fr) minmax(360px, 420px);
+    gap: 16px;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1881,7 +2920,6 @@ dd {
     width: min(100% - 20px, 1180px);
   }
 
-  .command-bar,
   .task-submit-panel,
   .detail-card-grid,
   .drawer-tools,
@@ -1901,6 +2939,35 @@ dd {
   .role-state {
     justify-items: start;
   }
+
+  .batch-console-layout {
+    inset: 10px;
+    top: auto;
+    left: auto;
+    width: auto;
+    height: calc(100vh - 20px);
+    max-height: none;
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(280px, 40vh);
+    gap: 12px;
+    transform: none;
+  }
+
+  .batch-window,
+  .task-detail-dock {
+    border-radius: 18px;
+  }
+
+  .batch-window-toolbar,
+  .batch-card-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-enter-from,
+  .modal-leave-to {
+    transform: translateY(12px) scale(0.98);
+  }
+
 }
 
 @media (max-width: 520px) {

@@ -56,7 +56,7 @@ def console_home() -> FileResponse:
 
 @app.get("/console/batches")
 def console_batches() -> FileResponse:
-    return FileResponse(WEB_DIR / "index.html")
+    return _agent_registry_page()
 
 
 @app.get("/console/agents")
@@ -66,7 +66,7 @@ def console_agents() -> FileResponse:
 
 @app.get("/console/batches/{batch_id}")
 def console_batch_detail(batch_id: str) -> FileResponse:
-    return FileResponse(WEB_DIR / "batch-detail.html")
+    return _agent_registry_page()
 
 
 @app.get("/console/runs/{run_id}")
