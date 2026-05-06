@@ -195,7 +195,9 @@ def test_run_replay_returns_input_output_logs_status_history_and_routing_snapsho
     assert payload["routing_snapshot"]["run_id"] == run_id
     assert payload["routing_snapshot"]["task_id"] == task_id
     assert payload["routing_snapshot"]["routing_reason"] is not None
-    assert payload["routing_snapshot"]["input_snapshot"] == {"text": "hello"}
+    assert payload["routing_snapshot"]["input_snapshot"]["text"] == "hello"
+    assert payload["routing_snapshot"]["input_snapshot"]["intent"]["source"] == "rules_fallback"
+    assert "deliverable_contract" in payload["routing_snapshot"]["input_snapshot"]
     assert payload["routing_snapshot"]["task_summary"]["task_id"] == task_id
     assert payload["routing_snapshot"]["dependency_summaries"] == []
     assert payload["timeline"]["task_id"] == task_id

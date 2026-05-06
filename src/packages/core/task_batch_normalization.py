@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import re
-from typing import Any
+from typing import Any, Callable
+
+from src.packages.core.intent import TaskIntent, is_auto_task_type
 
 
 STAGE_DEPENDENCY_HINTS = {
@@ -33,6 +35,7 @@ class NormalizedTask:
     inferred_dependency_client_task_ids: list[str]
     action: str
     notes: list[str]
+    recognized_intent: dict[str, Any] | None = None
 
 
 def _normalize_spaces(value: str) -> str:
@@ -113,6 +116,48 @@ def _fill_defaults(task: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     return filled, missing_fields_filled
 
 
+def _intent_payload(intent: TaskIntent) -> dict[str, Any]:
+    data = intent.model_dump()
+    return {
+        key: value
+        for key, value in data.items()
+        if key not in {"deliverable_contract", "routing_hints"}
+    }
+
+
+def _apply_intent(
+    task: dict[str, Any],
+    intent: TaskIntent | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None, list[str]]:
+    if intent is None:
+        return task, None, []
+
+    filled = dict(task)
+    payload = dict(filled.get("input_payload") or {})
+    intent_data = intent.model_dump()
+    original_task_type = str(filled.get("task_type") or "").strip().lower()
+    notes = [
+        f"intent recognized source={intent.source} primary_intent={intent.primary_intent} task_type={intent.task_type}",
+    ]
+
+    if is_auto_task_type(original_task_type):
+        filled["task_type"] = intent.task_type
+        notes.append(f"task_type normalized from {original_task_type or 'empty'} to {intent.task_type}")
+    elif original_task_type != intent.task_type:
+        notes.append(f"explicit task_type preserved despite recognized task_type={intent.task_type}")
+
+    payload["intent"] = _intent_payload(intent)
+    payload["deliverable_contract"] = intent.deliverable_contract.model_dump()
+    payload["routing_hints"] = intent.routing_hints.model_dump()
+    if intent.language and not payload.get("language"):
+        payload["language"] = intent.language
+    filled["input_payload"] = payload
+
+    for warning in intent.warnings:
+        notes.append(f"intent warning: {warning}")
+    return filled, intent_data, notes
+
+
 def _is_ambiguous(task: dict[str, Any]) -> bool:
     title = _normalize_spaces(task["title"])
     if len(title) < 4:
@@ -159,6 +204,8 @@ def _infer_dependency(
 
 def normalize_batch_tasks(
     tasks: list[dict[str, Any]],
+    *,
+    intent_recognizer: Callable[[dict[str, Any]], TaskIntent] | None = None,
 ) -> tuple[list[dict[str, Any]], list[NormalizedTask]]:
     exact_seen: dict[str, dict[str, Any]] = {}
     merge_seen: dict[tuple[str, str], dict[str, Any]] = {}
@@ -167,6 +214,11 @@ def normalize_batch_tasks(
 
     for original_task in tasks:
         filled_task, missing_fields_filled = _fill_defaults(original_task)
+        recognized_intent: dict[str, Any] | None = None
+        intent_notes: list[str] = []
+        if intent_recognizer is not None:
+            intent = intent_recognizer(filled_task)
+            filled_task, recognized_intent, intent_notes = _apply_intent(filled_task, intent)
         exact_key = _exact_signature(filled_task)
 
         if exact_key in exact_seen:
@@ -187,6 +239,7 @@ def normalize_batch_tasks(
                     inferred_dependency_client_task_ids=[],
                     action="deduped",
                     notes=[f"deduped_into={kept['client_task_id']}"],
+                    recognized_intent=recognized_intent,
                 )
             )
             continue
@@ -205,6 +258,7 @@ def normalize_batch_tasks(
                             "priority": filled_task["priority"],
                             "input_payload": filled_task["input_payload"],
                             "expected_output_schema": filled_task["expected_output_schema"],
+                            "task_type": filled_task["task_type"],
                         }
                     )
                 normalization_items.append(
@@ -223,6 +277,7 @@ def normalize_batch_tasks(
                         inferred_dependency_client_task_ids=[],
                         action="merged",
                         notes=[f"merged_into={kept['client_task_id']}"],
+                        recognized_intent=recognized_intent,
                     )
                 )
                 continue
@@ -234,8 +289,10 @@ def normalize_batch_tasks(
         normalized_tasks.append(filled_task)
         exact_seen[_exact_signature(filled_task)] = filled_task
         merge_seen[merge_key] = filled_task
-        notes: list[str] = []
+        notes: list[str] = [*intent_notes]
         action = "normalized" if missing_fields_filled or inferred_dependency_client_task_ids else "kept"
+        if intent_notes and action == "kept":
+            action = "normalized"
         if _is_ambiguous(filled_task):
             notes.append("task marked as ambiguous")
             if action == "kept":
@@ -261,6 +318,7 @@ def normalize_batch_tasks(
                 inferred_dependency_client_task_ids=inferred_dependency_client_task_ids,
                 action=action,
                 notes=notes,
+                recognized_intent=recognized_intent,
             )
         )
 

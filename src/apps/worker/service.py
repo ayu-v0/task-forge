@@ -156,6 +156,7 @@ class WorkerService:
                 task_id=task.id,
                 run_id=run.id,
                 result=final_result,
+                input_snapshot=run.input_snapshot or task.input_payload,
             )
             assignment.assignment_status = "fulfilled"
             transition_task_status(

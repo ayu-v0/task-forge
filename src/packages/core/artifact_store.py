@@ -28,8 +28,9 @@ def create_run_artifact(
     task_id: str,
     run_id: str,
     result: dict[str, Any],
+    input_snapshot: dict[str, Any] | None = None,
 ) -> ArtifactORM:
-    return create_run_artifacts(db, task_id=task_id, run_id=run_id, result=result)[0]
+    return create_run_artifacts(db, task_id=task_id, run_id=run_id, result=result, input_snapshot=input_snapshot)[0]
 
 
 def create_run_artifacts(
@@ -38,12 +39,14 @@ def create_run_artifacts(
     task_id: str,
     run_id: str,
     result: dict[str, Any],
+    input_snapshot: dict[str, Any] | None = None,
 ) -> list[ArtifactORM]:
     artifacts: list[ArtifactORM] = []
     for payload in build_artifact_payloads(
         task_id=task_id,
         run_id=run_id,
         output_snapshot=_normalize_raw_content(result),
+        input_snapshot=input_snapshot,
     ):
         artifact = ArtifactORM(
             task_id=payload["task_id"],

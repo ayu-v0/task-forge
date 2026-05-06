@@ -30,6 +30,8 @@ LANGUAGE_CONTENT_TYPES = {
     "ps1": "text/x-powershell",
     "shell": "text/x-shellscript",
     "sh": "text/x-shellscript",
+    "go": "text/x-go",
+    "golang": "text/x-go",
 }
 
 EXTENSION_LANGUAGES = {
@@ -44,6 +46,7 @@ EXTENSION_LANGUAGES = {
     ".yml": "yaml",
     ".ps1": "powershell",
     ".sh": "shell",
+    ".go": "go",
 }
 
 LANGUAGE_EXTENSIONS = {
@@ -64,6 +67,8 @@ LANGUAGE_EXTENSIONS = {
     "ps1": ".ps1",
     "shell": ".sh",
     "sh": ".sh",
+    "go": ".go",
+    "golang": ".go",
 }
 
 
@@ -338,11 +343,12 @@ def build_deliverable_artifact_payloads(
     task_id: str,
     run_id: str,
     output_snapshot: dict[str, Any],
+    input_snapshot: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     payloads: list[dict[str, Any]] = []
     deliverables = extract_deliverables(output_snapshot)
     if not deliverables:
-        deliverables = _infer_legacy_code_deliverables(task_id, output_snapshot)
+        deliverables = _infer_contract_deliverables(task_id, output_snapshot, input_snapshot)
     for index, deliverable in enumerate(deliverables, start=1):
         deliverable_type = str(deliverable.get("type", deliverable.get("artifact_type", "generic_result"))).strip()
         if deliverable_type == "code_file":
@@ -366,16 +372,169 @@ def build_deliverable_artifact_payloads(
     return payloads
 
 
+def _contract_from_input(input_snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(input_snapshot, dict):
+        return {}
+    contract = input_snapshot.get("deliverable_contract")
+    return contract if isinstance(contract, dict) else {}
+
+
+def _contract_expected_types(input_snapshot: dict[str, Any] | None) -> set[str]:
+    contract = _contract_from_input(input_snapshot)
+    expected = contract.get("expected_artifact_types")
+    if not isinstance(expected, list):
+        return set()
+    return {str(item).strip() for item in expected if str(item).strip()}
+
+
+def _summary_text(output_snapshot: dict[str, Any]) -> str:
+    summary = output_snapshot.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        return summary.strip()
+    result = output_snapshot.get("result")
+    if isinstance(result, dict):
+        nested_summary = result.get("summary")
+        if isinstance(nested_summary, str) and nested_summary.strip():
+            return nested_summary.strip()
+    return ""
+
+
+def _document_from_code_result(
+    *,
+    task_id: str,
+    output_snapshot: dict[str, Any],
+    input_snapshot: dict[str, Any] | None,
+    code_result: dict[str, Any],
+) -> dict[str, Any]:
+    contract = _contract_from_input(input_snapshot)
+    language = str(
+        code_result.get("language")
+        or output_snapshot.get("language")
+        or (input_snapshot or {}).get("language")
+        or ""
+    ).strip().lower()
+    code = str(code_result.get("code") or "")
+    fence_language = language if language and language != "text" else ""
+    title = _summary_text(output_snapshot) or "Generated code"
+    path = contract.get("file_extension")
+    if not isinstance(path, str) or not path.strip():
+        path = ".md"
+    extension = path if path.startswith(".") else f".{path}"
+    return {
+        "type": "document",
+        "path": f"generated/{task_id}{extension}",
+        "title": title,
+        "language": "markdown",
+        "content": f"```{fence_language}\n{code.rstrip()}\n```\n",
+        "inferred_from": "deliverable_contract.result.code",
+    }
+
+
+def _document_from_summary(task_id: str, output_snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = _summary_text(output_snapshot)
+    if not summary:
+        return []
+    return [
+        {
+            "type": "document",
+            "path": f"generated/{task_id}.md",
+            "title": "Generated summary",
+            "language": "markdown",
+            "content": summary,
+            "inferred_from": "deliverable_contract.summary",
+        }
+    ]
+
+
+def _document_from_content(task_id: str, output_snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    content = output_snapshot.get("content")
+    result = output_snapshot.get("result")
+    if not isinstance(content, str) or not content.strip():
+        if isinstance(result, dict):
+            nested_content = result.get("content") or result.get("body") or result.get("text")
+            content = nested_content if isinstance(nested_content, str) else ""
+    if not isinstance(content, str) or not content.strip():
+        return []
+
+    title = _summary_text(output_snapshot) or "Generated document"
+    return [
+        {
+            "type": "document",
+            "path": f"generated/{task_id}.md",
+            "title": title,
+            "language": "markdown",
+            "content": content,
+            "inferred_from": "deliverable_contract.result.content",
+        }
+    ]
+
+
+def _infer_contract_deliverables(
+    task_id: str,
+    output_snapshot: dict[str, Any],
+    input_snapshot: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    expected_types = _contract_expected_types(input_snapshot)
+    if not expected_types:
+        return _infer_legacy_code_deliverables(task_id, output_snapshot)
+
+    if "code_patch" in expected_types and expected_types <= {"code_patch"}:
+        return []
+
+    result = output_snapshot.get("result")
+    code_result = _find_legacy_code_result(result) if isinstance(result, dict) else None
+    if code_result is not None:
+        inferred: list[dict[str, Any]] = []
+        if "document" in expected_types:
+            inferred.append(
+                _document_from_code_result(
+                    task_id=task_id,
+                    output_snapshot=output_snapshot,
+                    input_snapshot=input_snapshot,
+                    code_result=code_result,
+                )
+            )
+        if "code_file" in expected_types:
+            inferred.extend(_infer_legacy_code_deliverables(task_id, output_snapshot))
+        if inferred:
+            return inferred
+
+    if "document" in expected_types:
+        content_deliverables = _document_from_content(task_id, output_snapshot)
+        if content_deliverables:
+            return content_deliverables
+        return _document_from_summary(task_id, output_snapshot)
+    return _infer_legacy_code_deliverables(task_id, output_snapshot)
+
+
+def _find_legacy_code_result(value: dict[str, Any], depth: int = 0) -> dict[str, Any] | None:
+    code = value.get("code")
+    if isinstance(code, str) and code.strip():
+        return value
+    if depth >= 3:
+        return None
+    for nested_key in ("result", "output", "artifact"):
+        nested = value.get(nested_key)
+        if isinstance(nested, dict):
+            found = _find_legacy_code_result(nested, depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
 def _infer_legacy_code_deliverables(task_id: str, output_snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     result = output_snapshot.get("result")
     if not isinstance(result, dict):
         return []
-    code = result.get("code")
+    code_result = _find_legacy_code_result(result)
+    if code_result is None:
+        return []
+    code = code_result.get("code")
     if not isinstance(code, str) or not code.strip():
         return []
 
-    language = str(result.get("language") or output_snapshot.get("language") or "text").strip().lower()
-    explicit_path = result.get("path") or result.get("file_path") or result.get("filename")
+    language = str(code_result.get("language") or output_snapshot.get("language") or "text").strip().lower()
+    explicit_path = code_result.get("path") or code_result.get("file_path") or code_result.get("filename")
     if isinstance(explicit_path, str) and _is_safe_relative_path(explicit_path):
         path = _normalize_path(explicit_path)
     else:
@@ -424,10 +583,16 @@ def build_artifact_payloads(
     task_id: str,
     run_id: str,
     output_snapshot: dict[str, Any],
+    input_snapshot: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     return [
         build_primary_artifact_payload(task_id=task_id, run_id=run_id, output_snapshot=output_snapshot),
-        *build_deliverable_artifact_payloads(task_id=task_id, run_id=run_id, output_snapshot=output_snapshot),
+        *build_deliverable_artifact_payloads(
+            task_id=task_id,
+            run_id=run_id,
+            output_snapshot=output_snapshot,
+            input_snapshot=input_snapshot,
+        ),
     ]
 
 

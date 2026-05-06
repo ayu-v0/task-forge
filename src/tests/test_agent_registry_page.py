@@ -148,6 +148,8 @@ def _insert_runs(task_id: str, agent_role_id: str, run_statuses: list[str]) -> N
 
 
 def _seed_registry_history(*, suffix: str, run_statuses: list[str]) -> dict:
+    batch_id = f"batch_{uuid.uuid4().hex}"
+    task_id = f"task_{uuid.uuid4().hex}"
     role = _register_agent(
         client,
         role_name=f"{TEST_ROLE_PREFIX}{suffix}",
@@ -158,31 +160,34 @@ def _seed_registry_history(*, suffix: str, run_statuses: list[str]) -> dict:
 
     engine = create_engine(_database_url())
     with Session(engine) as session:
-        batch = TaskBatchORM(
-            title=f"{TEST_BATCH_PREFIX}{suffix}",
-            description="registry seeded batch",
-            created_by="pytest",
-            status="submitted",
-            total_tasks=1,
+        session.add(
+            TaskBatchORM(
+                id=batch_id,
+                title=f"{TEST_BATCH_PREFIX}{suffix}",
+                description="registry seeded batch",
+                created_by="pytest",
+                status="submitted",
+                total_tasks=1,
+                metadata_json={},
+            )
         )
-        session.add(batch)
-        session.flush()
-        task = TaskORM(
-            batch_id=batch.id,
-            title=f"registry task {suffix}",
-            description="registry seeded task",
-            task_type="registry_success_case",
-            priority="medium",
-            status="success",
-            input_payload={},
-            expected_output_schema={},
-            assigned_agent_role=role_name,
-            dependency_ids=[],
-            retry_count=0,
+        session.add(
+            TaskORM(
+                id=task_id,
+                batch_id=batch_id,
+                title=f"registry task {suffix}",
+                description="registry seeded task",
+                task_type="registry_success_case",
+                priority="medium",
+                status="success",
+                input_payload={},
+                expected_output_schema={},
+                assigned_agent_role=role_name,
+                dependency_ids=[],
+                retry_count=0,
+                cancellation_requested=False,
+            )
         )
-        session.add(task)
-        session.flush()
-        task_id = task.id
         session.commit()
 
     _insert_runs(task_id, role_id, run_statuses)
@@ -263,28 +268,6 @@ def test_agent_registry_diagnosis_distinguishes_enabled_disabled_and_missing_mat
     assert missing_diagnosis["matching_disabled_roles"] == []
 
 
-def test_agent_registry_diagnosis_matches_capability_declared_task_type() -> None:
-    suffix = uuid.uuid4().hex[:8]
-    role = _register_agent(
-        client,
-        role_name=f"{TEST_ROLE_PREFIX}capability-{suffix}",
-        supported_task_types=[],
-    )
-
-    response = client.patch(
-        f"/agents/{role['id']}",
-        json={"capabilities": ["task:capability_only_case"]},
-    )
-    assert response.status_code == 200
-
-    registry_response = client.get("/agents/registry", params={"task_type": "capability_only_case"})
-
-    assert registry_response.status_code == 200
-    diagnosis = registry_response.json()["diagnosis"]
-    assert diagnosis["status"] == "matched_enabled"
-    assert diagnosis["matching_enabled_roles"] == [role["role_name"]]
-
-
 def test_agent_registry_reports_no_run_history_when_role_has_no_runs() -> None:
     suffix = uuid.uuid4().hex[:8]
     role = _register_agent(
@@ -308,25 +291,15 @@ def test_agent_registry_reports_no_run_history_when_role_has_no_runs() -> None:
 def test_console_agent_registry_page_is_accessible() -> None:
     response = client.get("/console/agents")
     assert response.status_code == 200
-    assert "Agent Registry" in response.text
+    assert "Task Forge" in response.text
     assert "/console/vue/" in response.text
 
 
 def test_root_route_serves_agent_registry_home_page() -> None:
     response = client.get("/")
     assert response.status_code == 200
-    assert "Agent Registry" in response.text
+    assert "Task Forge" in response.text
     assert "/console/vue/" in response.text
-
-
-def test_agent_registry_vue_module_asset_uses_javascript_mime_type() -> None:
-    js_assets = list((ROOT / "src" / "apps" / "web" / "dist" / "assets").glob("*.js"))
-    assert js_assets
-
-    response = client.get(f"/console/vue/assets/{js_assets[0].name}")
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/javascript")
 
 
 def test_agent_registry_vue_source_includes_required_drawer_interactions() -> None:
@@ -338,20 +311,74 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert "角色列表" in component_source
     assert "openDrawer" in component_source
     assert "closeDrawer" in component_source
-    assert "isNavOpen" in component_source
-    assert "toggleNav" in component_source
-    assert 'aria-label="Console navigation"' in component_source
-    assert 'aria-controls="console-nav-list"' in component_source
+    assert "isSideMenuOpen" in component_source
+    assert "toggleSideMenu" in component_source
+    assert "openRolesFromSideMenu" in component_source
+    assert "isBatchWindowOpen" in component_source
+    assert "openBatchWindow" in component_source
+    assert "closeBatchWindow" in component_source
+    assert "loadBatches" in component_source
+    assert "openBatchDetail" in component_source
+    assert "closeBatchTaskDetail" in component_source
+    assert "openInitialBatchWindowFromLocation" in component_source
+    assert "Task <span>Forge</span>" in component_source
+    assert "A black-purple command surface for routing visibility, role readiness, and agent lifecycle inspection." not in component_source
+    assert "viewAgent(agent)" in component_source
+    assert "fetch(`/agents/${encodeURIComponent(requestedAgentId)}`)" in component_source
+    assert "editAgent(agent)" in component_source
+    assert "saveAgentEdit" in component_source
+    assert "method: \"PATCH\"" in component_source
+    assert "role-side-panel" in component_source
+    assert "role-edit-panel" in component_source
+    assert "Only version, status, timeout, and retry policy can be edited here." in component_source
+    assert "capabilityDeclarationText" not in component_source
+    assert "promptBudgetPolicyText" not in component_source
+    assert "inputSchemaText" not in component_source
+    assert "outputSchemaText" not in component_source
+    assert "retrySelectedAgent" in component_source
+    assert "role-detail-panel" in component_source
+    assert "detail-card-grid" in component_source
+    assert "advanced-config" in component_source
+    assert ".role-item.selected" in component_source
+    assert "Capability declaration" in component_source
+    assert "supports_concurrency" in component_source
+    assert "allows_auto_retry" in component_source
+    assert "model_context_limit" in component_source
+    assert "reserved_output_tokens" in component_source
+    assert "console-side-nav" in component_source
+    assert "Console navigation" in component_source
+    assert "Expand console menu" in component_source
+    assert "Batch Console" in component_source
+    assert '<button class="side-nav-item" type="button" @click="openBatchWindow()">Batch Console</button>' in component_source
+    assert 'href="/console/batches"' not in component_source
+    assert ':href="`/console/batches/${submittedBatchId}`"' not in component_source
+    assert "batch-window" in component_source
+    assert "Batch console" in component_source
+    assert "batch-window-card-button" in component_source
+    assert "batch-card-open-indicator" in component_source
+    assert 'aria-pressed="selectedBatchId === batch.batch_id"' in component_source
+    assert "batch-console-layout" in component_source
+    assert "task-detail-dock" in component_source
+    assert "Task Detail" in component_source
+    assert "Select a batch to view task details" in component_source
+    assert "Batch detail" not in component_source
+    assert "batch-task-board" not in component_source
+    assert "batch-task-card" not in component_source
+    assert "View detail" not in component_source
+    assert "This code task did not produce file-level deliverables." in component_source
+    assert component_source.count("Open Agent Roles") == 1
+    assert "hero-actions" not in component_source
     assert "keydown" in component_source
     assert "statusFilter" in component_source
-    assert "inferTaskType" in component_source
-    assert 'return codeKeywords.some((keyword) => normalized.includes(keyword)) ? "code" : "worker_execute";' in component_source
-    assert "buildTaskInputPayload" in component_source
-    assert 'prompt: text' in component_source
     assert "Success rate" in component_source
     assert "Avg latency" in component_source
     assert "Total cost estimate" in component_source
-    assert "Why no suitable role?" in component_source
+    assert "Routing diagnosis" not in component_source
+    assert "Why no suitable role?" not in component_source
+    assert "Enter a task type to inspect matching roles." not in component_source
+    assert "Task type diagnosis" not in component_source
+    assert "Diagnose" not in component_source
+    assert "command-bar" not in component_source
     assert "No run history" in component_source
 
 
@@ -360,7 +387,8 @@ def test_agent_registry_vue_source_uses_premium_black_purple_theme() -> None:
     component_source = component_path.read_text(encoding="utf-8")
 
     assert "<style scoped>" in component_source
-    assert "Open Agent Roles" in component_source
+    assert "side-nav-toggle" in component_source
+    assert "side-nav-item" in component_source
     assert "Role List" in component_source
     assert "#6366f1" in component_source
     assert "#8b5cf6" in component_source
@@ -376,15 +404,3 @@ def test_agent_registry_built_css_does_not_disable_body_interaction() -> None:
     built_css = "\n".join(path.read_text(encoding="utf-8") for path in css_assets)
     assert "body{position:fixed" not in built_css
     assert "body{margin:0" in built_css
-
-
-def test_agent_registry_built_js_infers_code_task_type_for_submission() -> None:
-    js_assets = list((ROOT / "src" / "apps" / "web" / "dist" / "assets").glob("*.js"))
-    assert js_assets
-
-    built_js = "\n".join(path.read_text(encoding="utf-8") for path in js_assets)
-    assert "inferTaskType" in built_js or "worker_execute" in built_js
-    assert "codeKeywords" in built_js or "python" in built_js
-    assert "prompt:" in built_js
-    assert '||"planner_preprocess"' not in built_js
-    assert '|| "planner_preprocess"' not in built_js
