@@ -246,6 +246,7 @@ function inferCodeArtifactsFromJsonArtifacts(artifacts) {
         ...artifact,
         artifact_id: `${artifact.artifact_id || artifact.run_id || "artifact"}:inferred-code-file`,
         artifact_type: "code_file",
+        deliverable_type: "code",
         uri: `workspace://${path}`,
         content_type: contentTypeForLanguage(language),
         raw_content: { path, content },
@@ -261,6 +262,7 @@ function inferCodeArtifactsFromJsonArtifacts(artifacts) {
         metadata: {
           ...(artifact.metadata || {}),
           artifact_role: "final_deliverable",
+          deliverable_type: "code",
           inferred_from_artifact_type: "json",
         },
       };
@@ -337,6 +339,46 @@ function artifactTitle(artifact) {
   return summary.title || rawContent.title || artifact.artifact_type || "Artifact";
 }
 
+function artifactDeliverableType(artifact) {
+  const metadata = artifact.metadata || {};
+  const structuredOutput = artifact.structured_output || {};
+  const summary = artifact.summary || {};
+  const value =
+    artifact.deliverable_type ||
+    metadata.deliverable_type ||
+    structuredOutput.deliverable_type ||
+    summary.deliverable_type ||
+    "";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized) {
+    return normalized;
+  }
+  if (["code_file", "code_patch"].includes(artifact.artifact_type)) {
+    return "code";
+  }
+  if (artifact.content_type === "text/markdown") {
+    return "markdown";
+  }
+  if (artifact.content_type === "text/plain") {
+    return "txt";
+  }
+  if (artifact.artifact_type === "json") {
+    return "json";
+  }
+  return artifact.artifact_type || "artifact";
+}
+
+function artifactDeliverableLabel(artifact) {
+  const labels = {
+    markdown: "Markdown",
+    txt: "TXT",
+    code: "Code",
+    json: "JSON",
+  };
+  const deliverableType = artifactDeliverableType(artifact);
+  return labels[deliverableType] || deliverableType;
+}
+
 function artifactPreview(artifact) {
   const summary = artifact.summary || {};
   const structuredOutput = artifact.structured_output || {};
@@ -365,6 +407,61 @@ function fullArtifactContent(artifact) {
     return rawContent.output || "";
   }
   return hasObjectContent(rawContent) ? JSON.stringify(rawContent, null, 2) : "";
+}
+
+function artifactDownloadContent(artifact) {
+  const rawContent = artifact.raw_content || {};
+  if (artifact.artifact_type === "code_file") {
+    return rawContent.content || "";
+  }
+  if (artifact.artifact_type === "code_patch") {
+    return rawContent.diff || "";
+  }
+  if (artifact.artifact_type === "test_report") {
+    return rawContent.output || "";
+  }
+  if (["document", "analysis_report", "data_file"].includes(artifact.artifact_type)) {
+    return rawContent.content || rawContent.body || "";
+  }
+  const fullContent = fullArtifactContent(artifact);
+  if (fullContent) {
+    return fullContent;
+  }
+  if (hasObjectContent(rawContent)) {
+    return JSON.stringify(rawContent, null, 2);
+  }
+  return artifactPreview(artifact) || "";
+}
+
+function artifactDownloadFilename(artifact) {
+  const rawContent = artifact.raw_content || {};
+  const path = String(rawContent.path || "").replaceAll("\\", "/");
+  const pathName = path.split("/").filter(Boolean).pop();
+  if (pathName) {
+    return pathName;
+  }
+  const extensions = {
+    markdown: ".md",
+    txt: ".txt",
+    code: ".txt",
+    json: ".json",
+  };
+  const deliverableType = artifactDeliverableType(artifact);
+  const extension = artifact.artifact_type === "code_patch" ? ".diff" : extensions[deliverableType] || ".txt";
+  return `${artifact.task_id || artifact.artifact_id || "artifact"}-${artifact.artifact_type || "deliverable"}${extension}`;
+}
+
+function downloadArtifact(artifact) {
+  const content = artifactDownloadContent(artifact);
+  const blob = new Blob([content], { type: artifact.content_type || "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = artifactDownloadFilename(artifact);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function openDrawer() {
@@ -1377,7 +1474,13 @@ onBeforeUnmount(() => {
               >
                 <div class="batch-artifact-head">
                   <strong>{{ artifactTitle(artifact) }}</strong>
+                  <span>{{ artifactDeliverableLabel(artifact) }}</span>
+                </div>
+                <div class="batch-artifact-actions">
                   <span>{{ artifact.content_type || artifact.artifact_type || "unknown" }}</span>
+                  <button class="artifact-download-button" type="button" @click="downloadArtifact(artifact)">
+                    Download
+                  </button>
                 </div>
                 <p class="batch-artifact-meta">
                   {{ artifact.uri || "No URI" }} /
@@ -2388,6 +2491,35 @@ dd {
 .batch-artifact-head span {
   color: #94a3b8;
   font-size: 0.78rem;
+}
+
+.batch-artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.artifact-download-button {
+  min-height: 30px;
+  border: 1px solid rgba(167, 139, 250, 0.28);
+  border-radius: 999px;
+  background: rgba(139, 92, 246, 0.12);
+  color: #ddd6fe;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 6px 10px;
+}
+
+.artifact-download-button:hover,
+.artifact-download-button:focus-visible {
+  border-color: rgba(196, 181, 253, 0.62);
+  background: rgba(139, 92, 246, 0.22);
+  outline: none;
 }
 
 .batch-flow-card h5 {

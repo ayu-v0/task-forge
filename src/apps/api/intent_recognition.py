@@ -10,6 +10,7 @@ import httpx
 from src.apps.worker.model_config import load_model_config, resolve_model_request_config
 from src.packages.core.intent import (
     ALLOWED_ARTIFACT_TYPES,
+    ALLOWED_DELIVERABLE_TYPES,
     ALLOWED_TASK_TYPES,
     TaskIntent,
     normalize_model_intent_payload,
@@ -128,6 +129,7 @@ def _build_request_body(task: dict[str, Any], config: dict[str, Any]) -> dict[st
         },
         "available_task_types": sorted(ALLOWED_TASK_TYPES),
         "available_artifact_types": sorted(ALLOWED_ARTIFACT_TYPES),
+        "available_deliverable_types": sorted(ALLOWED_DELIVERABLE_TYPES),
         "required_output_schema": {
             "primary_intent": "coding|research|planning|review|writing|testing|general",
             "task_type": "one available_task_types value",
@@ -137,7 +139,8 @@ def _build_request_body(task: dict[str, Any], config: dict[str, Any]) -> dict[st
             "operation": "short operation or null",
             "deliverable_contract": {
                 "expected_artifact_types": ["one or more available_artifact_types values"],
-                "presentation_format": "markdown or null",
+                "deliverable_type": "markdown|txt|code|json or null",
+                "presentation_format": "markdown|plain_text or null",
                 "file_extension": ".py/.go/.md/etc or null",
                 "include_code_block": "boolean",
                 "require_file_level_artifact": "boolean",
@@ -154,6 +157,7 @@ def _build_request_body(task: dict[str, Any], config: dict[str, Any]) -> dict[st
             "Writing code, implementing functions, fixing bugs, or generating scripts means primary_intent=coding and task_type=code.",
             "Markdown is a presentation format. Code requested in Markdown remains a coding task.",
             "If code should be delivered as Markdown, prefer expected_artifact_types=['document'] and include_code_block=true.",
+            "Set deliverable_type to markdown for Markdown files, txt for plain text, code for source code or patches, and json for structured data only.",
             "If the user asks for a file, prefer code_file. If the user asks for patch/diff, prefer code_patch.",
         ],
     }

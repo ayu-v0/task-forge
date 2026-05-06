@@ -23,6 +23,7 @@ def test_rule_based_intent_keeps_coding_when_markdown_is_requested() -> None:
     assert intent.task_type == "code"
     assert intent.language == "go"
     assert intent.deliverable_contract.expected_artifact_types == ["document"]
+    assert intent.deliverable_contract.deliverable_type == "markdown"
     assert intent.deliverable_contract.presentation_format == "markdown"
     assert intent.deliverable_contract.include_code_block is True
 
@@ -40,8 +41,25 @@ def test_rule_based_intent_classifies_essay_as_writing_document() -> None:
     assert intent.primary_intent == "writing"
     assert intent.task_type == "worker_execute"
     assert intent.deliverable_contract.expected_artifact_types == ["document"]
+    assert intent.deliverable_contract.deliverable_type == "markdown"
     assert intent.deliverable_contract.presentation_format == "markdown"
     assert intent.deliverable_contract.file_extension == ".md"
+
+
+def test_rule_based_intent_recognizes_txt_deliverable() -> None:
+    intent = rule_based_intent(
+        {
+            "title": "Submitted task",
+            "description": "Write a short plain text summary and save it as a .txt file",
+            "task_type": "auto",
+            "input_payload": {"prompt": "Write a short plain text summary and save it as a .txt file"},
+        }
+    )
+
+    assert intent.deliverable_contract.expected_artifact_types == ["document"]
+    assert intent.deliverable_contract.deliverable_type == "txt"
+    assert intent.deliverable_contract.presentation_format == "plain_text"
+    assert intent.deliverable_contract.file_extension == ".txt"
 
 
 def test_normalization_writes_recognized_intent_and_contract_for_auto_task() -> None:
@@ -61,6 +79,7 @@ def test_normalization_writes_recognized_intent_and_contract_for_auto_task() -> 
     assert normalized[0]["task_type"] == "code"
     assert normalized[0]["input_payload"]["intent"]["primary_intent"] == "coding"
     assert normalized[0]["input_payload"]["deliverable_contract"]["expected_artifact_types"] == ["document"]
+    assert normalized[0]["input_payload"]["deliverable_contract"]["deliverable_type"] == "markdown"
     assert items[0].recognized_intent is not None
     assert items[0].recognized_intent["task_type"] == "code"
 
@@ -122,6 +141,7 @@ def test_model_intent_service_parses_openai_compatible_response(monkeypatch: pyt
     assert intent.task_type == "code"
     assert intent.language == "go"
     assert intent.deliverable_contract.expected_artifact_types == ["document"]
+    assert intent.deliverable_contract.deliverable_type == "markdown"
 
 
 def test_model_intent_service_uses_global_model_config_without_role_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -196,6 +216,7 @@ def test_model_intent_service_uses_global_model_config_without_role_override(mon
     assert intent.source == "model"
     assert intent.primary_intent == "writing"
     assert intent.deliverable_contract.expected_artifact_types == ["document"]
+    assert intent.deliverable_contract.deliverable_type == "markdown"
 
 
 def test_model_intent_service_falls_back_to_rules_on_model_error(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -31,6 +31,12 @@ ALLOWED_ARTIFACT_TYPES = {
     "data_file",
     "json",
 }
+ALLOWED_DELIVERABLE_TYPES = {
+    "markdown",
+    "txt",
+    "code",
+    "json",
+}
 AUTO_TASK_TYPES = {"", "auto", "unknown", "task", "general", "misc"}
 
 LANGUAGE_ALIASES = {
@@ -62,6 +68,7 @@ class IntentModel(BaseModel):
 
 class DeliverableContract(IntentModel):
     expected_artifact_types: list[str] = Field(default_factory=list)
+    deliverable_type: str | None = None
     presentation_format: str | None = None
     file_extension: str | None = None
     include_code_block: bool = False
@@ -80,6 +87,22 @@ class DeliverableContract(IntentModel):
             if artifact_type in ALLOWED_ARTIFACT_TYPES and artifact_type not in normalized:
                 normalized.append(artifact_type)
         return normalized or ["json"]
+
+    @field_validator("deliverable_type", mode="before")
+    @classmethod
+    def _normalize_deliverable_type(cls, value: Any) -> str | None:
+        deliverable_type = str(value or "").strip().lower().replace("-", "_")
+        aliases = {
+            "md": "markdown",
+            "mark_down": "markdown",
+            "text": "txt",
+            "plain": "txt",
+            "plain_text": "txt",
+            "source": "code",
+            "source_code": "code",
+        }
+        deliverable_type = aliases.get(deliverable_type, deliverable_type)
+        return deliverable_type if deliverable_type in ALLOWED_DELIVERABLE_TYPES else None
 
     @field_validator("presentation_format", "file_extension", mode="before")
     @classmethod
@@ -195,6 +218,8 @@ def _detect_language(text: str) -> str | None:
 def _file_extension_for(language: str | None, presentation_format: str | None = None) -> str | None:
     if presentation_format == "markdown":
         return ".md"
+    if presentation_format in {"txt", "plain_text"}:
+        return ".txt"
     return {
         "python": ".py",
         "go": ".go",
@@ -224,32 +249,48 @@ def _routing_for(primary_intent: str, task_type: str) -> RoutingHints:
 
 def _contract_for(text: str, primary_intent: str, language: str | None) -> DeliverableContract:
     wants_markdown = _contains_any(text, ["markdown", "md格式", "markdown形式", "markdown 格式", "markdown 形式", "以md", "以 markdown"])
+    wants_txt = _contains_any(text, ["txt", ".txt", "plain text", "text file", "纯文本", "文本文件"])
     wants_patch = _contains_any(text, ["patch", "diff", "补丁", "差异"])
     wants_test_report = _contains_any(text, ["测试报告", "test report", "测试结果"])
-    wants_file = _contains_any(text, ["文件", "file", "保存为", "生成一个", ".py", ".go", ".js", ".ts", ".md"])
+    wants_file = _contains_any(text, ["文件", "file", "保存为", "生成一个", ".py", ".go", ".js", ".ts", ".md", ".txt"])
 
     artifact_types: list[str]
+    deliverable_type: str
     if wants_patch:
         artifact_types = ["code_patch"]
+        deliverable_type = "code"
     elif wants_markdown:
         artifact_types = ["document"]
+        deliverable_type = "markdown"
+    elif wants_txt:
+        artifact_types = ["document"]
+        deliverable_type = "txt"
     elif primary_intent == "coding":
         artifact_types = ["code_file"]
+        deliverable_type = "code"
     elif primary_intent == "research":
         artifact_types = ["analysis_report"]
+        deliverable_type = "markdown"
     elif primary_intent in {"writing", "planning"}:
         artifact_types = ["document"]
+        deliverable_type = "markdown"
     else:
         artifact_types = ["json"]
+        deliverable_type = "json"
 
     if wants_test_report and "test_report" not in artifact_types:
         artifact_types.append("test_report")
 
-    presentation_format = "markdown" if wants_markdown or primary_intent == "writing" else None
+    presentation_format = None
+    if deliverable_type == "markdown":
+        presentation_format = "markdown"
+    elif deliverable_type == "txt":
+        presentation_format = "plain_text"
     include_code_block = bool(primary_intent == "coding" and presentation_format == "markdown")
     require_file = bool(primary_intent == "coding" and "code_file" in artifact_types and not presentation_format)
     return DeliverableContract(
         expected_artifact_types=artifact_types,
+        deliverable_type=deliverable_type,
         presentation_format=presentation_format,
         file_extension=_file_extension_for(language, presentation_format) if (wants_file or presentation_format or primary_intent == "writing") else None,
         include_code_block=include_code_block,
@@ -347,9 +388,12 @@ def normalize_model_intent_payload(
     provided_task_type: str | None = None,
 ) -> TaskIntent:
     intent = TaskIntent.model_validate(payload)
-    if not intent.deliverable_contract.expected_artifact_types:
+    if not intent.deliverable_contract.expected_artifact_types or not intent.deliverable_contract.deliverable_type:
         fallback = rule_based_intent(fallback_text, provided_task_type=provided_task_type)
-        intent.deliverable_contract = fallback.deliverable_contract
+        if not intent.deliverable_contract.expected_artifact_types:
+            intent.deliverable_contract.expected_artifact_types = fallback.deliverable_contract.expected_artifact_types
+        if not intent.deliverable_contract.deliverable_type:
+            intent.deliverable_contract.deliverable_type = fallback.deliverable_contract.deliverable_type
     if intent.confidence < 0.5:
         intent.warnings.append("low_intent_confidence")
     return intent

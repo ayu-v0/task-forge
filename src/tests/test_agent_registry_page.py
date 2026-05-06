@@ -366,6 +366,11 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert "batch-task-card" not in component_source
     assert "View detail" not in component_source
     assert "This code task did not produce file-level deliverables." in component_source
+    assert "artifactDeliverableType" in component_source
+    assert "artifactDeliverableLabel" in component_source
+    assert "downloadArtifact" in component_source
+    assert "artifact-download-button" in component_source
+    assert "Download" in component_source
     assert component_source.count("Open Agent Roles") == 1
     assert "hero-actions" not in component_source
     assert "keydown" in component_source

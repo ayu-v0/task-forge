@@ -229,6 +229,7 @@ def test_submit_auto_task_type_returns_recognized_code_intent() -> None:
     assert normalization["recognized_intent"]["task_type"] == "code"
     assert normalization["recognized_intent"]["language"] == "go"
     assert normalization["recognized_intent"]["deliverable_contract"]["expected_artifact_types"] == ["document"]
+    assert normalization["recognized_intent"]["deliverable_contract"]["deliverable_type"] == "markdown"
     assert any("task_type normalized from auto to code" in note for note in normalization["notes"])
 
     summary_response = client.get(f"/task-batches/{body['batch_id']}/summary")

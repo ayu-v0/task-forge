@@ -608,6 +608,7 @@ def get_task_batch_summary(batch_id: str, db: Session = Depends(get_db)) -> Task
             task_id=artifact.task_id,
             run_id=artifact.run_id,
             artifact_type=artifact.artifact_type,
+            deliverable_type=(artifact.metadata_json or {}).get("deliverable_type"),
             uri=artifact.uri,
             content_type=artifact.content_type,
             raw_content=artifact.raw_content,

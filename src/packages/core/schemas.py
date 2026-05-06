@@ -160,6 +160,7 @@ class BatchArtifactRead(SchemaModel):
     task_id: str | None = None
     run_id: str | None = None
     artifact_type: str
+    deliverable_type: str | None = None
     uri: str
     content_type: str | None = None
     raw_content: dict[str, Any] = Field(default_factory=dict)
@@ -571,6 +572,7 @@ class ArtifactCreate(SchemaModel):
     task_id: str | None = None
     run_id: str | None = None
     artifact_type: str
+    deliverable_type: str | None = None
     uri: str
     content_type: str | None = None
     raw_content: dict[str, Any] = Field(default_factory=dict)
