@@ -50,8 +50,13 @@ def _agent_registry_page() -> FileResponse:
 
 
 @app.get("/")
-def console_home() -> FileResponse:
-    return _agent_registry_page()
+def login_home() -> FileResponse:
+    return FileResponse(WEB_DIR / "login.html")
+
+
+@app.get("/login")
+def login_page() -> FileResponse:
+    return FileResponse(WEB_DIR / "login.html")
 
 
 @app.get("/console/batches")

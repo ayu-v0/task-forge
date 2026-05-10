@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Task Forge Login</title>
+  <link rel="stylesheet" href="/console/assets/login.css">
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-hero" aria-label="Task Forge login">
+      <div class="brand-block">
+        <p class="eyebrow">Operations Console</p>
+        <h1>Task <span>Forge</span></h1>
+        <p class="subtitle">Sign in to submit task batches, inspect agent readiness, and review execution deliverables.</p>
+      </div>
+
+      <section class="capability-grid" aria-label="Console capabilities">
+        <article>
+          <strong>Task Intake</strong>
+          <span>Submit one task or normalize multi-line batches.</span>
+        </article>
+        <article>
+          <strong>Agent Roles</strong>
+          <span>Check enabled roles, run history, latency, and retry policy.</span>
+        </article>
+        <article>
+          <strong>Batch Flow</strong>
+          <span>Open batch details, task timelines, and generated artifacts.</span>
+        </article>
+      </section>
+    </section>
+
+    <section class="login-panel" aria-label="Sign in form">
+      <div class="panel-heading">
+        <p class="eyebrow">Secure entry</p>
+        <h2>Sign in</h2>
+        <p>Use your workspace account to continue to the Task Forge console.</p>
+      </div>
+
+      <form id="login-form" class="login-form" novalidate>
+        <label class="field">
+          <span>Workspace</span>
+          <input id="workspace-input" name="workspace" type="text" autocomplete="organization" placeholder="task-forge" required>
+        </label>
+        <label class="field">
+          <span>Account</span>
+          <input id="account-input" name="account" type="email" autocomplete="username" placeholder="operator@example.com" required>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input id="password-input" name="password" type="password" autocomplete="current-password" placeholder="Enter password" required minlength="6">
+        </label>
+
+        <div class="form-row">
+          <label class="remember-control">
+            <input id="remember-input" type="checkbox" checked>
+            <span>Keep me signed in</span>
+          </label>
+          <a href="/console/agents">Continue without auth</a>
+        </div>
+
+        <p id="login-message" class="login-message" role="status" aria-live="polite"></p>
+        <button id="login-button" class="primary-button" type="submit">Enter Console</button>
+      </form>
+    </section>
+  </main>
+
+  <script src="/console/assets/login.js"></script>
+</body>
+</html>

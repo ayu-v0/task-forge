@@ -295,11 +295,24 @@ def test_console_agent_registry_page_is_accessible() -> None:
     assert "/console/vue/" in response.text
 
 
-def test_root_route_serves_agent_registry_home_page() -> None:
+def test_root_route_serves_login_page() -> None:
     response = client.get("/")
     assert response.status_code == 200
-    assert "Task Forge" in response.text
-    assert "/console/vue/" in response.text
+    assert "Task Forge Login" in response.text
+    assert "/console/assets/login.css" in response.text
+    assert "Enter Console" in response.text
+
+
+def test_login_route_serves_login_page_assets() -> None:
+    response = client.get("/login")
+    assert response.status_code == 200
+    assert "Sign in to submit task batches" in response.text
+    assert "/console/assets/login.js" in response.text
+
+    script_response = client.get("/console/assets/login.js")
+    assert script_response.status_code == 200
+    assert "taskForgeLogin" in script_response.text
+    assert 'window.location.assign("/console/agents")' in script_response.text
 
 
 def test_agent_registry_vue_source_includes_required_drawer_interactions() -> None:
