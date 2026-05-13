@@ -5,6 +5,7 @@ const passwordInput = document.getElementById("password-input");
 const rememberInput = document.getElementById("remember-input");
 const loginMessage = document.getElementById("login-message");
 const loginButton = document.getElementById("login-button");
+const SESSION_COOKIE_NAME = "taskForgeSession";
 
 function setMessage(message, state = "") {
   loginMessage.textContent = message;
@@ -40,11 +41,14 @@ loginForm.addEventListener("submit", (event) => {
   setMessage("Session accepted. Opening console...", "success");
 
   const storage = rememberInput.checked ? window.localStorage : window.sessionStorage;
-  storage.setItem("taskForgeLogin", JSON.stringify({
+  const session = {
     workspace: workspaceInput.value.trim(),
     account: accountInput.value.trim(),
     signedInAt: new Date().toISOString(),
-  }));
+  };
+  storage.setItem("taskForgeLogin", JSON.stringify(session));
+  const cookieMaxAge = rememberInput.checked ? "; Max-Age=2592000" : "";
+  document.cookie = `${SESSION_COOKIE_NAME}=${encodeURIComponent(JSON.stringify(session))}; Path=/console; SameSite=Lax${cookieMaxAge}`;
 
   window.setTimeout(() => {
     window.location.assign("/console/agents");

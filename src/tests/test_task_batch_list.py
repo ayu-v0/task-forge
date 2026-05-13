@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_PREFIX = "batch-list-test-"
+CONSOLE_SESSION_HEADERS = {"Cookie": "taskForgeSession=pytest-session"}
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -175,21 +176,33 @@ def test_list_task_batches_returns_empty_list_when_no_batches_exist() -> None:
 
 
 def test_console_batches_page_is_accessible() -> None:
-    response = client.get("/console/batches")
+    response = client.get("/console/batches", headers=CONSOLE_SESSION_HEADERS)
     assert response.status_code == 200
     assert "Task Forge" in response.text
     assert "/console/vue/" in response.text
+
+
+def test_console_batches_page_requires_login() -> None:
+    response = client.get("/console/batches", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/login"
 
 
 def test_console_batches_detail_route_is_compatible_with_agent_console_entry() -> None:
-    response = client.get("/console/batches/sample-batch-id")
+    response = client.get("/console/batches/sample-batch-id", headers=CONSOLE_SESSION_HEADERS)
     assert response.status_code == 200
     assert "Task Forge" in response.text
     assert "/console/vue/" in response.text
 
 
+def test_console_batches_detail_route_requires_login() -> None:
+    response = client.get("/console/batches/sample-batch-id", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/login"
+
+
 def test_console_batches_window_is_owned_by_agent_registry_vue() -> None:
-    response = client.get("/console/batches")
+    response = client.get("/console/batches", headers=CONSOLE_SESSION_HEADERS)
     assert response.status_code == 200
     component_source = (ROOT / "src" / "apps" / "web" / "vue" / "src" / "AgentRegistry.vue").read_text(encoding="utf-8")
     assert "openBatchWindow" in component_source

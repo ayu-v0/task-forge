@@ -3,8 +3,8 @@ from __future__ import annotations
 import mimetypes
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from src.apps.api.bootstrap import ensure_builtin_agent_roles
@@ -35,6 +35,7 @@ app.include_router(reviews_router)
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 VUE_DIST_DIR = WEB_DIR / "dist"
+CONSOLE_SESSION_COOKIE = "taskForgeSession"
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
 app.mount("/console/assets", StaticFiles(directory=WEB_DIR), name="console-assets")
@@ -49,6 +50,12 @@ def _agent_registry_page() -> FileResponse:
     return FileResponse(WEB_DIR / "agents.html")
 
 
+def _require_console_session(request: Request) -> RedirectResponse | None:
+    if request.cookies.get(CONSOLE_SESSION_COOKIE):
+        return None
+    return RedirectResponse(url="/login", status_code=307)
+
+
 @app.get("/")
 def login_home() -> FileResponse:
     return FileResponse(WEB_DIR / "login.html")
@@ -60,22 +67,34 @@ def login_page() -> FileResponse:
 
 
 @app.get("/console/batches")
-def console_batches() -> FileResponse:
+def console_batches(request: Request) -> Response:
+    redirect = _require_console_session(request)
+    if redirect is not None:
+        return redirect
     return _agent_registry_page()
 
 
 @app.get("/console/agents")
-def console_agents() -> FileResponse:
+def console_agents(request: Request) -> Response:
+    redirect = _require_console_session(request)
+    if redirect is not None:
+        return redirect
     return _agent_registry_page()
 
 
 @app.get("/console/batches/{batch_id}")
-def console_batch_detail(batch_id: str) -> FileResponse:
+def console_batch_detail(batch_id: str, request: Request) -> Response:
+    redirect = _require_console_session(request)
+    if redirect is not None:
+        return redirect
     return _agent_registry_page()
 
 
 @app.get("/console/runs/{run_id}")
-def console_run_detail(run_id: str) -> FileResponse:
+def console_run_detail(run_id: str, request: Request) -> Response:
+    redirect = _require_console_session(request)
+    if redirect is not None:
+        return redirect
     return FileResponse(WEB_DIR / "run-detail.html")
 
 

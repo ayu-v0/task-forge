@@ -15,6 +15,7 @@ from src.packages.core.db.models import ExecutionRunORM, TaskBatchORM, TaskORM
 ROOT = Path(__file__).resolve().parents[2]
 TEST_ROLE_PREFIX = "registry-test-role-"
 TEST_BATCH_PREFIX = "registry-test-batch-"
+CONSOLE_SESSION_HEADERS = {"Cookie": "taskForgeSession=pytest-session"}
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -289,10 +290,16 @@ def test_agent_registry_reports_no_run_history_when_role_has_no_runs() -> None:
 
 
 def test_console_agent_registry_page_is_accessible() -> None:
-    response = client.get("/console/agents")
+    response = client.get("/console/agents", headers=CONSOLE_SESSION_HEADERS)
     assert response.status_code == 200
     assert "Task Forge" in response.text
     assert "/console/vue/" in response.text
+
+
+def test_console_agent_registry_page_requires_login() -> None:
+    response = client.get("/console/agents", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/login"
 
 
 def test_root_route_serves_login_page() -> None:
@@ -312,7 +319,9 @@ def test_login_route_serves_login_page_assets() -> None:
     script_response = client.get("/console/assets/login.js")
     assert script_response.status_code == 200
     assert "taskForgeLogin" in script_response.text
+    assert "taskForgeSession" in script_response.text
     assert 'window.location.assign("/console/agents")' in script_response.text
+    assert "Continue without auth" not in response.text
 
 
 def test_agent_registry_vue_source_includes_required_drawer_interactions() -> None:

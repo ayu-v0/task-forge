@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_PREFIX = "run-detail-test-"
+CONSOLE_SESSION_HEADERS = {"Cookie": "taskForgeSession=pytest-session"}
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -285,14 +286,20 @@ def test_run_detail_endpoint_handles_cancelled_run_without_logs() -> None:
 
 
 def test_console_run_detail_page_is_accessible() -> None:
-    response = client.get("/console/runs/sample-run-id")
+    response = client.get("/console/runs/sample-run-id", headers=CONSOLE_SESSION_HEADERS)
     assert response.status_code == 200
     assert "Run Detail" in response.text
     assert "/console/assets/run-detail.js" in response.text
 
 
+def test_console_run_detail_page_requires_login() -> None:
+    response = client.get("/console/runs/sample-run-id", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/login"
+
+
 def test_run_detail_page_assets_include_task_lifecycle_timeline() -> None:
-    page_response = client.get("/console/runs/sample-run-id")
+    page_response = client.get("/console/runs/sample-run-id", headers=CONSOLE_SESSION_HEADERS)
     assert page_response.status_code == 200
     assert "Lifecycle timeline" in page_response.text
 
