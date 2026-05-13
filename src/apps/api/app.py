@@ -7,10 +7,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from src.apps.api.bootstrap import ensure_builtin_agent_roles
+from src.apps.api.bootstrap import ensure_builtin_agent_roles, ensure_default_user
 from src.apps.api.routers import (
     agents_router,
     artifacts_router,
+    auth_router,
     health_router,
     reviews_router,
     runs_router,
@@ -18,6 +19,7 @@ from src.apps.api.routers import (
     tasks_router,
 )
 from src.apps.api.settings import settings
+from src.apps.api.security import CONSOLE_SESSION_COOKIE, verify_console_session_token
 
 app = FastAPI(
     title=settings.app_name,
@@ -26,6 +28,7 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
+app.include_router(auth_router)
 app.include_router(task_batches_router)
 app.include_router(tasks_router)
 app.include_router(agents_router)
@@ -35,7 +38,6 @@ app.include_router(reviews_router)
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 VUE_DIST_DIR = WEB_DIR / "dist"
-CONSOLE_SESSION_COOKIE = "taskForgeSession"
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
 app.mount("/console/assets", StaticFiles(directory=WEB_DIR), name="console-assets")
@@ -51,7 +53,7 @@ def _agent_registry_page() -> FileResponse:
 
 
 def _require_console_session(request: Request) -> RedirectResponse | None:
-    if request.cookies.get(CONSOLE_SESSION_COOKIE):
+    if verify_console_session_token(request.cookies.get(CONSOLE_SESSION_COOKIE)):
         return None
     return RedirectResponse(url="/login", status_code=307)
 
@@ -100,4 +102,5 @@ def console_run_detail(run_id: str, request: Request) -> Response:
 
 @app.on_event("startup")
 def bootstrap_defaults() -> None:
+    ensure_default_user()
     ensure_builtin_agent_roles()

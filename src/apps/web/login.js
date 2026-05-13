@@ -1,11 +1,9 @@
 const loginForm = document.getElementById("login-form");
-const workspaceInput = document.getElementById("workspace-input");
 const accountInput = document.getElementById("account-input");
 const passwordInput = document.getElementById("password-input");
 const rememberInput = document.getElementById("remember-input");
 const loginMessage = document.getElementById("login-message");
 const loginButton = document.getElementById("login-button");
-const SESSION_COOKIE_NAME = "taskForgeSession";
 
 function setMessage(message, state = "") {
   loginMessage.textContent = message;
@@ -13,9 +11,6 @@ function setMessage(message, state = "") {
 }
 
 function validateForm() {
-  if (!workspaceInput.value.trim()) {
-    return "Enter a workspace name.";
-  }
   if (!accountInput.value.trim()) {
     return "Enter an account email.";
   }
@@ -28,7 +23,7 @@ function validateForm() {
   return "";
 }
 
-loginForm.addEventListener("submit", (event) => {
+loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const validationError = validateForm();
   if (validationError) {
@@ -38,24 +33,49 @@ loginForm.addEventListener("submit", (event) => {
 
   loginButton.disabled = true;
   loginButton.textContent = "Entering...";
-  setMessage("Session accepted. Opening console...", "success");
+  setMessage("Checking account...", "");
+  let shouldResetButton = true;
 
-  const storage = rememberInput.checked ? window.localStorage : window.sessionStorage;
-  const session = {
-    workspace: workspaceInput.value.trim(),
-    account: accountInput.value.trim(),
-    signedInAt: new Date().toISOString(),
-  };
-  storage.setItem("taskForgeLogin", JSON.stringify(session));
-  const cookieMaxAge = rememberInput.checked ? "; Max-Age=2592000" : "";
-  document.cookie = `${SESSION_COOKIE_NAME}=${encodeURIComponent(JSON.stringify(session))}; Path=/console; SameSite=Lax${cookieMaxAge}`;
+  try {
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      credentials: "same-origin",
+      body: JSON.stringify({
+        account: accountInput.value.trim(),
+        password: passwordInput.value,
+        remember_me: rememberInput.checked,
+      }),
+    });
 
-  window.setTimeout(() => {
-    window.location.assign("/console/agents");
-  }, 450);
+    if (!response.ok) {
+      setMessage("Invalid account or password.", "error");
+      return;
+    }
+
+    const session = await response.json();
+    const storage = rememberInput.checked ? window.localStorage : window.sessionStorage;
+    storage.setItem("taskForgeLogin", JSON.stringify({
+      account: session.account,
+      signedInAt: new Date().toISOString(),
+    }));
+
+    setMessage("Session accepted. Opening console...", "success");
+    shouldResetButton = false;
+    window.setTimeout(() => {
+      window.location.assign("/console/agents");
+    }, 450);
+  } catch (error) {
+    setMessage("Unable to sign in. Check the API service and try again.", "error");
+  } finally {
+    if (shouldResetButton) {
+      loginButton.disabled = false;
+      loginButton.textContent = "Enter Console";
+    }
+  }
 });
 
-[workspaceInput, accountInput, passwordInput].forEach((input) => {
+[accountInput, passwordInput].forEach((input) => {
   input.addEventListener("input", () => {
     if (loginMessage.classList.contains("error")) {
       setMessage("");

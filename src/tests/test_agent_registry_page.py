@@ -9,13 +9,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from src.packages.core.db.models import ExecutionRunORM, TaskBatchORM, TaskORM
+from src.apps.api.security import create_console_session_token, hash_password
+from src.packages.core.db.models import ExecutionRunORM, TaskBatchORM, TaskORM, UserORM
 
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_ROLE_PREFIX = "registry-test-role-"
 TEST_BATCH_PREFIX = "registry-test-batch-"
-CONSOLE_SESSION_HEADERS = {"Cookie": "taskForgeSession=pytest-session"}
+TEST_USER_PREFIX = "auth-test-"
+CONSOLE_SESSION_HEADERS = {"Cookie": f"taskForgeSession={create_console_session_token('pytest@example.com')}"}
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -48,6 +50,15 @@ def _cleanup_database() -> None:
                 """
             ),
             {"role_prefix": f"{TEST_ROLE_PREFIX}%"},
+        )
+        conn.execute(
+            text(
+                """
+                DELETE FROM users
+                WHERE email LIKE :user_prefix
+                """
+            ),
+            {"user_prefix": f"{TEST_USER_PREFIX}%"},
         )
 
 
@@ -315,11 +326,18 @@ def test_login_route_serves_login_page_assets() -> None:
     assert response.status_code == 200
     assert "Sign in to submit task batches" in response.text
     assert "/console/assets/login.js" in response.text
+    assert "Workspace" not in response.text
+    assert "workspace-input" not in response.text
+    assert "Use your account to continue" in response.text
 
     script_response = client.get("/console/assets/login.js")
     assert script_response.status_code == 200
     assert "taskForgeLogin" in script_response.text
-    assert "taskForgeSession" in script_response.text
+    assert 'fetch("/auth/login"' in script_response.text
+    assert "remember_me" in script_response.text
+    assert "workspaceInput" not in script_response.text
+    assert "Enter a workspace name." not in script_response.text
+    assert "document.cookie" not in script_response.text
     assert 'window.location.assign("/console/agents")' in script_response.text
     assert "Continue without auth" not in response.text
 
@@ -331,6 +349,42 @@ def test_login_route_serves_login_page_assets() -> None:
     assert "letter-spacing: 0;" in style_response.text
     assert "white-space: nowrap;" in style_response.text
     assert "text-wrap: nowrap;" in style_response.text
+
+
+def test_auth_login_validates_credentials_against_database() -> None:
+    email = f"{TEST_USER_PREFIX}{uuid.uuid4().hex[:8]}@example.com"
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        session.add(
+            UserORM(
+                email=email,
+                password_hash=hash_password("correct-password"),
+                display_name="Auth Test",
+                enabled=True,
+            )
+        )
+        session.commit()
+
+    invalid_response = client.post(
+        "/auth/login",
+        json={"account": email, "password": "wrong-password", "remember_me": True},
+    )
+    assert invalid_response.status_code == 401
+    assert "taskForgeSession" not in invalid_response.cookies
+
+    valid_response = client.post(
+        "/auth/login",
+        json={"account": email, "password": "correct-password", "remember_me": True},
+    )
+    assert valid_response.status_code == 200
+    assert valid_response.json()["account"] == email
+    assert "taskForgeSession" in valid_response.cookies
+
+    console_response = client.get(
+        "/console/agents",
+        headers={"Cookie": f"taskForgeSession={valid_response.cookies['taskForgeSession']}"},
+    )
+    assert console_response.status_code == 200
 
 
 def test_agent_registry_vue_source_includes_required_drawer_interactions() -> None:

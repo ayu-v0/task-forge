@@ -9,10 +9,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from src.apps.api.security import create_console_session_token
+
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_PREFIX = "batch-list-test-"
-CONSOLE_SESSION_HEADERS = {"Cookie": "taskForgeSession=pytest-session"}
+CONSOLE_SESSION_HEADERS = {"Cookie": f"taskForgeSession={create_console_session_token('pytest@example.com')}"}
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))

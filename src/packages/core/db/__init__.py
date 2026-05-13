@@ -9,6 +9,7 @@ from .models import (
     ReviewCheckpointORM,
     TaskBatchORM,
     TaskORM,
+    UserORM,
 )
 from .session import create_engine_from_env, get_database_url
 
@@ -23,6 +24,7 @@ __all__ = [
     "ReviewCheckpointORM",
     "TaskBatchORM",
     "TaskORM",
+    "UserORM",
     "create_engine_from_env",
     "get_database_url",
     "load_database_config",

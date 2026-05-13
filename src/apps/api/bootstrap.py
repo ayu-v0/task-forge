@@ -4,7 +4,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.apps.api.deps import engine
-from src.packages.core.db.models import AgentRoleORM
+from src.apps.api.security import hash_password
+from src.apps.api.settings import settings
+from src.packages.core.db.models import AgentRoleORM, UserORM
 
 
 BUILTIN_OUTPUT_CONTRACT = {
@@ -171,3 +173,23 @@ def ensure_builtin_agent_roles() -> None:
                         version="1.0.0",
                     )
                 )
+
+
+def ensure_default_user() -> None:
+    account = settings.console_admin_email.strip().lower()
+    if not account or not settings.console_admin_password:
+        return
+
+    with Session(engine) as session:
+        with session.begin():
+            existing = session.scalar(select(UserORM).where(UserORM.email == account))
+            if existing is not None:
+                return
+            session.add(
+                UserORM(
+                    email=account,
+                    password_hash=hash_password(settings.console_admin_password),
+                    display_name="Console Operator",
+                    enabled=True,
+                )
+            )

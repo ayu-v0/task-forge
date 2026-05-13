@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     debug: bool = False
     database_url: str | None = None
+    console_session_secret: str = "task-forge-dev-session-secret"
+    console_admin_email: str = "operator@example.com"
+    console_admin_password: str = "password"
 
     model_config = SettingsConfigDict(
         env_file=".env",
