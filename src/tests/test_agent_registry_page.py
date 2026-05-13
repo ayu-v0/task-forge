@@ -323,6 +323,15 @@ def test_login_route_serves_login_page_assets() -> None:
     assert 'window.location.assign("/console/agents")' in script_response.text
     assert "Continue without auth" not in response.text
 
+    style_response = client.get("/console/assets/login.css")
+    assert style_response.status_code == 200
+    assert "overflow: visible;" in style_response.text
+    assert "font-size: clamp(56px, 6vw, 96px);" in style_response.text
+    assert "line-height: 1.16;" in style_response.text
+    assert "letter-spacing: 0;" in style_response.text
+    assert "white-space: nowrap;" in style_response.text
+    assert "text-wrap: nowrap;" in style_response.text
+
 
 def test_agent_registry_vue_source_includes_required_drawer_interactions() -> None:
     component_path = ROOT / "src" / "apps" / "web" / "vue" / "src" / "AgentRegistry.vue"

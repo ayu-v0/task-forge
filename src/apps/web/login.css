@@ -32,6 +32,19 @@ body {
   font-family: "Aptos", "Segoe UI", sans-serif;
 }
 
+.login-shell,
+.login-hero,
+.login-panel,
+.brand-block,
+.capability-grid,
+.capability-grid article,
+.login-form,
+.field,
+.field input {
+  min-width: 0;
+  max-width: 100%;
+}
+
 button,
 input {
   font: inherit;
@@ -82,7 +95,7 @@ button {
   display: grid;
   align-content: space-between;
   min-height: 620px;
-  overflow: hidden;
+  overflow: visible;
   border-color: rgba(139, 92, 246, 0.24);
   border-radius: 28px;
   padding: clamp(30px, 5vw, 56px);
@@ -91,6 +104,7 @@ button {
 .login-hero::after {
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   pointer-events: none;
   content: "";
   background:
@@ -102,6 +116,10 @@ button {
 .capability-grid {
   position: relative;
   z-index: 1;
+}
+
+.brand-block {
+  width: 100%;
 }
 
 .eyebrow {
@@ -120,18 +138,27 @@ p {
 }
 
 h1 {
-  max-width: 680px;
-  margin-bottom: 18px;
-  font-size: clamp(3.3rem, 8vw, 7.2rem);
-  line-height: 0.88;
-  letter-spacing: -0.085em;
+  display: block;
+  width: 100%;
+  max-width: none;
+  margin-bottom: 20px;
+  overflow: visible;
+  padding: 0 0.08em 0.18em 0;
+  font-size: clamp(56px, 6vw, 96px);
+  line-height: 1.16;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  text-wrap: nowrap;
 }
 
 h1 span {
   display: inline-block;
+  padding-bottom: 0.16em;
   background: linear-gradient(135deg, #f8fafc 0%, #c4b5fd 38%, #8b5cf6 76%, #38bdf8 100%);
   background-clip: text;
   color: transparent;
+  line-height: 1.16;
   text-shadow: 0 0 42px rgba(139, 92, 246, 0.24);
 }
 
@@ -147,6 +174,7 @@ h2 {
   color: #cbd5e1;
   font-size: 1.04rem;
   line-height: 1.75;
+  overflow-wrap: anywhere;
 }
 
 .capability-grid {
@@ -178,6 +206,7 @@ h2 {
   color: var(--muted);
   font-size: 0.88rem;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .login-panel {
@@ -195,6 +224,7 @@ h2 {
   margin-bottom: 0;
   color: var(--muted);
   line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .login-form {
@@ -313,7 +343,13 @@ h2 {
   transform: translateY(-1px);
 }
 
-@media (max-width: 920px) {
+@media (min-width: 1024px) {
+  .login-hero {
+    min-width: 500px;
+  }
+}
+
+@media (max-width: 1023px) {
   .login-shell {
     grid-template-columns: 1fr;
     align-content: start;
@@ -334,6 +370,11 @@ h2 {
   .login-panel {
     border-radius: 20px;
     padding: 22px;
+  }
+
+  h1 {
+    font-size: clamp(44px, 13vw, 56px);
+    line-height: 1.16;
   }
 
   .capability-grid {
