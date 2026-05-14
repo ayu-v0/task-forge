@@ -187,11 +187,18 @@ def test_artifact_detail_returns_code_file_deliverable() -> None:
     assert artifact_response.status_code == 200
     payload = artifact_response.json()
     assert payload["artifact_type"] == "code_file"
+    assert payload["deliverable_type"] == "code"
     assert payload["uri"] == "workspace://src/example.py"
     assert payload["summary"]["path"] == "src/example.py"
     assert payload["summary"]["language"] == "python"
     assert payload["raw_content"]["content"] == "print('example')\n"
     assert payload["metadata"]["artifact_role"] == "final_deliverable"
+
+    download_response = client.get(f"/artifacts/{artifact['artifact_id']}/download")
+    assert download_response.status_code == 200
+    assert download_response.text == "print('example')\n"
+    assert "src%2Fexample.py" not in download_response.headers["content-disposition"]
+    assert "example.py" in download_response.headers["content-disposition"]
 
 
 def test_artifact_detail_returns_404_for_unknown_artifact() -> None:

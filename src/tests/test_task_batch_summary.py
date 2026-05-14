@@ -343,6 +343,7 @@ def test_summary_returns_typed_deliverable_artifacts() -> None:
     ]
     assert {artifact["artifact_type"] for artifact in typed_artifacts} == {"code_file", "test_report"}
     code_file = next(artifact for artifact in typed_artifacts if artifact["artifact_type"] == "code_file")
+    assert code_file["deliverable_type"] == "code"
     assert code_file["uri"] == "workspace://src/summary_generated.py"
     assert code_file["raw_content"]["content"] == "VALUE = 1\n"
 

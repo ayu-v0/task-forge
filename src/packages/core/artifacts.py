@@ -71,6 +71,15 @@ LANGUAGE_EXTENSIONS = {
     "golang": ".go",
 }
 
+DELIVERABLE_TYPE_EXTENSIONS = {
+    "markdown": ".md",
+    "txt": ".txt",
+    "code": ".txt",
+    "json": ".json",
+}
+
+ALLOWED_DELIVERABLE_TYPES = set(DELIVERABLE_TYPE_EXTENSIONS)
+
 
 def infer_artifact_type(output_snapshot: dict[str, Any]) -> str:
     if output_snapshot.get("stage") == "reviewer":
@@ -150,6 +159,54 @@ def _content_type_for(path: str, language: Any, fallback: str = "text/plain") ->
     return LANGUAGE_CONTENT_TYPES.get(suffix.lstrip("."), fallback)
 
 
+def _normalize_deliverable_type(value: Any) -> str | None:
+    deliverable_type = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "md": "markdown",
+        "mark_down": "markdown",
+        "text": "txt",
+        "plain": "txt",
+        "plain_text": "txt",
+        "source": "code",
+        "source_code": "code",
+    }
+    deliverable_type = aliases.get(deliverable_type, deliverable_type)
+    return deliverable_type if deliverable_type in ALLOWED_DELIVERABLE_TYPES else None
+
+
+def _deliverable_type_from_contract(input_snapshot: dict[str, Any] | None) -> str | None:
+    contract = _contract_from_input(input_snapshot)
+    return _normalize_deliverable_type(contract.get("deliverable_type"))
+
+
+def _deliverable_type_for(
+    *,
+    artifact_type: str,
+    path: str = "",
+    language: Any = None,
+    deliverable: dict[str, Any] | None = None,
+    input_snapshot: dict[str, Any] | None = None,
+) -> str:
+    explicit = _normalize_deliverable_type((deliverable or {}).get("deliverable_type"))
+    if explicit:
+        return explicit
+    contract_type = _deliverable_type_from_contract(input_snapshot)
+    if contract_type:
+        return contract_type
+    if artifact_type in {"code_file", "code_patch"}:
+        return "code"
+    if artifact_type == "json":
+        return "json"
+    normalized_language = _language_for_path(path, language)
+    if normalized_language in {"markdown", "md"}:
+        return "markdown"
+    if PurePosixPath(path).suffix.lower() == ".txt":
+        return "txt"
+    if artifact_type in {"document", "analysis_report"}:
+        return "markdown"
+    return "txt"
+
+
 def _extract_deliverables_from(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
@@ -183,6 +240,7 @@ def _generic_deliverable_payload(
         "artifact_role": ARTIFACT_ROLE_FINAL_DELIVERABLE,
         "deliverable_index": index,
         "original_type": str(deliverable.get("type", "generic_result")),
+        "deliverable_type": _deliverable_type_for(artifact_type="generic_result", deliverable=deliverable),
     }
     if warning:
         metadata["warning"] = warning
@@ -221,6 +279,12 @@ def _code_file_payload(task_id: str, run_id: str, deliverable: dict[str, Any], i
         "source": "worker",
         "artifact_role": ARTIFACT_ROLE_FINAL_DELIVERABLE,
         "deliverable_index": index,
+        "deliverable_type": _deliverable_type_for(
+            artifact_type="code_file",
+            path=path,
+            language=deliverable.get("language"),
+            deliverable=deliverable,
+        ),
     }
     if path_sanitized:
         metadata["warning"] = "sanitized_code_file_path"
@@ -236,6 +300,7 @@ def _code_file_payload(task_id: str, run_id: str, deliverable: dict[str, Any], i
             "path": path,
             "language": language,
             "change_type": change_type,
+            "deliverable_type": metadata["deliverable_type"],
             "line_count": _line_count(content),
             "content_preview": _preview_text(content),
         },
@@ -279,6 +344,7 @@ def _code_patch_payload(task_id: str, run_id: str, deliverable: dict[str, Any], 
             "source": "worker",
             "artifact_role": ARTIFACT_ROLE_FINAL_DELIVERABLE,
             "deliverable_index": index,
+            "deliverable_type": _deliverable_type_for(artifact_type="code_patch", deliverable=deliverable),
         },
         "schema_version": ARTIFACT_SCHEMA_VERSION,
     }
@@ -301,6 +367,7 @@ def _test_report_payload(task_id: str, run_id: str, deliverable: dict[str, Any],
             "source": "worker",
             "artifact_role": ARTIFACT_ROLE_FINAL_DELIVERABLE,
             "deliverable_index": index,
+            "deliverable_type": _deliverable_type_for(artifact_type="test_report", deliverable=deliverable),
         },
         "schema_version": ARTIFACT_SCHEMA_VERSION,
     }
@@ -313,6 +380,7 @@ def _document_like_payload(
     deliverable: dict[str, Any],
     index: int,
     artifact_type: str,
+    input_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     path = _normalize_path(str(deliverable.get("path", "")))
     title = str(deliverable.get("title", path or artifact_type))
@@ -320,6 +388,13 @@ def _document_like_payload(
     uri = f"{artifact_type}://{task_id}/{run_id}/{index}"
     if path and _is_safe_relative_path(path):
         uri = f"workspace://{path}"
+    deliverable_type = _deliverable_type_for(
+        artifact_type=artifact_type,
+        path=path,
+        language=deliverable.get("language"),
+        deliverable=deliverable,
+        input_snapshot=input_snapshot,
+    )
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -327,12 +402,13 @@ def _document_like_payload(
         "uri": uri,
         "content_type": _content_type_for(path, deliverable.get("language"), "text/plain"),
         "raw_content": {"path": path, "title": title, "content": content},
-        "summary": {"path": path, "title": title},
-        "structured_output": {"path": path, "title": title, "content_preview": _preview_text(content)},
+        "summary": {"path": path, "title": title, "deliverable_type": deliverable_type},
+        "structured_output": {"path": path, "title": title, "deliverable_type": deliverable_type, "content_preview": _preview_text(content)},
         "metadata": {
             "source": "worker",
             "artifact_role": ARTIFACT_ROLE_FINAL_DELIVERABLE,
             "deliverable_index": index,
+            "deliverable_type": deliverable_type,
         },
         "schema_version": ARTIFACT_SCHEMA_VERSION,
     }
@@ -365,6 +441,7 @@ def build_deliverable_artifact_payloads(
                     deliverable=deliverable,
                     index=index,
                     artifact_type=deliverable_type,
+                    input_snapshot=input_snapshot,
                 )
             )
         else:
@@ -407,6 +484,7 @@ def _document_from_code_result(
     code_result: dict[str, Any],
 ) -> dict[str, Any]:
     contract = _contract_from_input(input_snapshot)
+    deliverable_type = _normalize_deliverable_type(contract.get("deliverable_type")) or "markdown"
     language = str(
         code_result.get("language")
         or output_snapshot.get("language")
@@ -418,10 +496,21 @@ def _document_from_code_result(
     title = _summary_text(output_snapshot) or "Generated code"
     path = contract.get("file_extension")
     if not isinstance(path, str) or not path.strip():
-        path = ".md"
+        path = DELIVERABLE_TYPE_EXTENSIONS.get(deliverable_type, ".md")
     extension = path if path.startswith(".") else f".{path}"
+    if deliverable_type == "txt":
+        return {
+            "type": "document",
+            "deliverable_type": "txt",
+            "path": f"generated/{task_id}{extension}",
+            "title": title,
+            "language": "text",
+            "content": f"{code.rstrip()}\n",
+            "inferred_from": "deliverable_contract.result.code",
+        }
     return {
         "type": "document",
+        "deliverable_type": "markdown",
         "path": f"generated/{task_id}{extension}",
         "title": title,
         "language": "markdown",
@@ -430,23 +519,36 @@ def _document_from_code_result(
     }
 
 
-def _document_from_summary(task_id: str, output_snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+def _document_from_summary(
+    task_id: str,
+    output_snapshot: dict[str, Any],
+    input_snapshot: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     summary = _summary_text(output_snapshot)
     if not summary:
         return []
+    contract = _contract_from_input(input_snapshot)
+    deliverable_type = _normalize_deliverable_type(contract.get("deliverable_type")) or "markdown"
+    extension = str(contract.get("file_extension") or DELIVERABLE_TYPE_EXTENSIONS[deliverable_type])
+    extension = extension if extension.startswith(".") else f".{extension}"
     return [
         {
             "type": "document",
-            "path": f"generated/{task_id}.md",
+            "deliverable_type": deliverable_type,
+            "path": f"generated/{task_id}{extension}",
             "title": "Generated summary",
-            "language": "markdown",
+            "language": "markdown" if deliverable_type == "markdown" else "text",
             "content": summary,
             "inferred_from": "deliverable_contract.summary",
         }
     ]
 
 
-def _document_from_content(task_id: str, output_snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+def _document_from_content(
+    task_id: str,
+    output_snapshot: dict[str, Any],
+    input_snapshot: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     content = output_snapshot.get("content")
     result = output_snapshot.get("result")
     if not isinstance(content, str) or not content.strip():
@@ -457,12 +559,17 @@ def _document_from_content(task_id: str, output_snapshot: dict[str, Any]) -> lis
         return []
 
     title = _summary_text(output_snapshot) or "Generated document"
+    contract = _contract_from_input(input_snapshot)
+    deliverable_type = _normalize_deliverable_type(contract.get("deliverable_type")) or "markdown"
+    extension = str(contract.get("file_extension") or DELIVERABLE_TYPE_EXTENSIONS[deliverable_type])
+    extension = extension if extension.startswith(".") else f".{extension}"
     return [
         {
             "type": "document",
-            "path": f"generated/{task_id}.md",
+            "deliverable_type": deliverable_type,
+            "path": f"generated/{task_id}{extension}",
             "title": title,
-            "language": "markdown",
+            "language": "markdown" if deliverable_type == "markdown" else "text",
             "content": content,
             "inferred_from": "deliverable_contract.result.content",
         }
@@ -500,10 +607,10 @@ def _infer_contract_deliverables(
             return inferred
 
     if "document" in expected_types:
-        content_deliverables = _document_from_content(task_id, output_snapshot)
+        content_deliverables = _document_from_content(task_id, output_snapshot, input_snapshot)
         if content_deliverables:
             return content_deliverables
-        return _document_from_summary(task_id, output_snapshot)
+        return _document_from_summary(task_id, output_snapshot, input_snapshot)
     return _infer_legacy_code_deliverables(task_id, output_snapshot)
 
 
@@ -558,8 +665,10 @@ def build_primary_artifact_payload(
     task_id: str,
     run_id: str,
     output_snapshot: dict[str, Any],
+    input_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     artifact_type = infer_artifact_type(output_snapshot)
+    deliverable_type = _deliverable_type_for(artifact_type=artifact_type, input_snapshot=input_snapshot)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -573,6 +682,7 @@ def build_primary_artifact_payload(
             "source": "worker",
             "artifact_role": ARTIFACT_ROLE_PRIMARY_OUTPUT,
             "artifact_type": artifact_type,
+            "deliverable_type": deliverable_type,
         },
         "schema_version": ARTIFACT_SCHEMA_VERSION,
     }
@@ -586,7 +696,12 @@ def build_artifact_payloads(
     input_snapshot: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     return [
-        build_primary_artifact_payload(task_id=task_id, run_id=run_id, output_snapshot=output_snapshot),
+        build_primary_artifact_payload(
+            task_id=task_id,
+            run_id=run_id,
+            output_snapshot=output_snapshot,
+            input_snapshot=input_snapshot,
+        ),
         *build_deliverable_artifact_payloads(
             task_id=task_id,
             run_id=run_id,

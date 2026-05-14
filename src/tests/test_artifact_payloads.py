@@ -46,6 +46,7 @@ def test_build_artifact_payloads_creates_code_file_patch_and_test_report() -> No
     assert code_file["summary"]["path"] == "src/foo.py"
     assert code_file["raw_content"]["content"] == "print('ok')\n"
     assert code_file["metadata"]["artifact_role"] == "final_deliverable"
+    assert code_file["metadata"]["deliverable_type"] == "code"
 
     code_patch = payloads[2]
     assert code_patch["content_type"] == "text/x-diff"
@@ -188,6 +189,42 @@ def test_build_artifact_payloads_uses_markdown_document_contract_for_legacy_code
     assert payloads[1]["uri"] == "workspace://generated/task_go_md.md"
     assert payloads[1]["content_type"] == "text/markdown"
     assert payloads[1]["raw_content"]["content"].startswith("```go\npackage main")
+    assert payloads[1]["metadata"]["deliverable_type"] == "markdown"
+
+
+def test_build_artifact_payloads_uses_txt_document_contract_for_legacy_code() -> None:
+    output_snapshot = {
+        "status": "success",
+        "summary": "Generated Python code",
+        "result": {
+            "code": "print('plain')\n",
+            "language": "python",
+        },
+    }
+    input_snapshot = {
+        "deliverable_contract": {
+            "expected_artifact_types": ["document"],
+            "deliverable_type": "txt",
+            "presentation_format": "plain_text",
+            "file_extension": ".txt",
+            "include_code_block": False,
+            "require_file_level_artifact": False,
+            "allow_primary_json_only": False,
+        }
+    }
+
+    payloads = build_artifact_payloads(
+        task_id="task_py_txt",
+        run_id="run_1",
+        output_snapshot=output_snapshot,
+        input_snapshot=input_snapshot,
+    )
+
+    assert [payload["artifact_type"] for payload in payloads] == ["json", "document"]
+    assert payloads[1]["uri"] == "workspace://generated/task_py_txt.txt"
+    assert payloads[1]["content_type"] == "text/plain"
+    assert payloads[1]["raw_content"]["content"] == "print('plain')\n"
+    assert payloads[1]["metadata"]["deliverable_type"] == "txt"
 
 
 def test_build_artifact_payloads_uses_document_contract_for_result_content() -> None:

@@ -9,12 +9,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from src.packages.core.db.models import ExecutionRunORM, TaskBatchORM, TaskORM
+from src.apps.api.security import create_console_session_token, hash_password
+from src.packages.core.db.models import ExecutionRunORM, TaskBatchORM, TaskORM, UserORM
 
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_ROLE_PREFIX = "registry-test-role-"
 TEST_BATCH_PREFIX = "registry-test-batch-"
+TEST_USER_PREFIX = "auth-test-"
+CONSOLE_SESSION_HEADERS = {"Cookie": f"taskForgeSession={create_console_session_token('pytest@example.com')}"}
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -47,6 +50,15 @@ def _cleanup_database() -> None:
                 """
             ),
             {"role_prefix": f"{TEST_ROLE_PREFIX}%"},
+        )
+        conn.execute(
+            text(
+                """
+                DELETE FROM users
+                WHERE email LIKE :user_prefix
+                """
+            ),
+            {"user_prefix": f"{TEST_USER_PREFIX}%"},
         )
 
 
@@ -289,17 +301,90 @@ def test_agent_registry_reports_no_run_history_when_role_has_no_runs() -> None:
 
 
 def test_console_agent_registry_page_is_accessible() -> None:
-    response = client.get("/console/agents")
+    response = client.get("/console/agents", headers=CONSOLE_SESSION_HEADERS)
     assert response.status_code == 200
     assert "Task Forge" in response.text
     assert "/console/vue/" in response.text
 
 
-def test_root_route_serves_agent_registry_home_page() -> None:
+def test_console_agent_registry_page_requires_login() -> None:
+    response = client.get("/console/agents", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/login"
+
+
+def test_root_route_serves_login_page() -> None:
     response = client.get("/")
     assert response.status_code == 200
-    assert "Task Forge" in response.text
-    assert "/console/vue/" in response.text
+    assert "Task Forge Login" in response.text
+    assert "/console/assets/login.css" in response.text
+    assert "Enter Console" in response.text
+
+
+def test_login_route_serves_login_page_assets() -> None:
+    response = client.get("/login")
+    assert response.status_code == 200
+    assert "Sign in to submit task batches" in response.text
+    assert "/console/assets/login.js" in response.text
+    assert "Workspace" not in response.text
+    assert "workspace-input" not in response.text
+    assert "Use your account to continue" in response.text
+
+    script_response = client.get("/console/assets/login.js")
+    assert script_response.status_code == 200
+    assert "taskForgeLogin" in script_response.text
+    assert 'fetch("/auth/login"' in script_response.text
+    assert "remember_me" in script_response.text
+    assert "workspaceInput" not in script_response.text
+    assert "Enter a workspace name." not in script_response.text
+    assert "document.cookie" not in script_response.text
+    assert 'window.location.assign("/console/agents")' in script_response.text
+    assert "Continue without auth" not in response.text
+
+    style_response = client.get("/console/assets/login.css")
+    assert style_response.status_code == 200
+    assert "overflow: visible;" in style_response.text
+    assert "font-size: clamp(56px, 6vw, 96px);" in style_response.text
+    assert "line-height: 1.16;" in style_response.text
+    assert "letter-spacing: 0;" in style_response.text
+    assert "white-space: nowrap;" in style_response.text
+    assert "text-wrap: nowrap;" in style_response.text
+
+
+def test_auth_login_validates_credentials_against_database() -> None:
+    email = f"{TEST_USER_PREFIX}{uuid.uuid4().hex[:8]}@example.com"
+    engine = create_engine(_database_url())
+    with Session(engine) as session:
+        session.add(
+            UserORM(
+                email=email,
+                password_hash=hash_password("correct-password"),
+                display_name="Auth Test",
+                enabled=True,
+            )
+        )
+        session.commit()
+
+    invalid_response = client.post(
+        "/auth/login",
+        json={"account": email, "password": "wrong-password", "remember_me": True},
+    )
+    assert invalid_response.status_code == 401
+    assert "taskForgeSession" not in invalid_response.cookies
+
+    valid_response = client.post(
+        "/auth/login",
+        json={"account": email, "password": "correct-password", "remember_me": True},
+    )
+    assert valid_response.status_code == 200
+    assert valid_response.json()["account"] == email
+    assert "taskForgeSession" in valid_response.cookies
+
+    console_response = client.get(
+        "/console/agents",
+        headers={"Cookie": f"taskForgeSession={valid_response.cookies['taskForgeSession']}"},
+    )
+    assert console_response.status_code == 200
 
 
 def test_agent_registry_vue_source_includes_required_drawer_interactions() -> None:
@@ -366,6 +451,11 @@ def test_agent_registry_vue_source_includes_required_drawer_interactions() -> No
     assert "batch-task-card" not in component_source
     assert "View detail" not in component_source
     assert "This code task did not produce file-level deliverables." in component_source
+    assert "artifactDeliverableType" in component_source
+    assert "artifactDeliverableLabel" in component_source
+    assert "downloadArtifact" in component_source
+    assert "artifact-download-button" in component_source
+    assert "Download" in component_source
     assert component_source.count("Open Agent Roles") == 1
     assert "hero-actions" not in component_source
     assert "keydown" in component_source

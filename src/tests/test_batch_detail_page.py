@@ -10,9 +10,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from src.apps.api.security import create_console_session_token
+
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_PREFIX = "batch-detail-test-"
+CONSOLE_SESSION_HEADERS = {"Cookie": f"taskForgeSession={create_console_session_token('pytest@example.com')}"}
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -132,10 +135,16 @@ def test_batch_summary_includes_dependency_ids_for_detail_view() -> None:
 
 
 def test_console_batch_detail_page_is_accessible() -> None:
-    response = client.get("/console/batches/sample-batch-id")
+    response = client.get("/console/batches/sample-batch-id", headers=CONSOLE_SESSION_HEADERS)
     assert response.status_code == 200
-    assert "Batch Detail" in response.text
-    assert "/console/assets/batch-detail.js" in response.text
+    assert "Task Forge" in response.text
+    assert "/console/vue/" in response.text
+
+
+def test_console_batch_detail_page_requires_login() -> None:
+    response = client.get("/console/batches/sample-batch-id", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/login"
 
 
 def test_batch_detail_page_can_link_to_run_detail_when_latest_run_exists() -> None:
@@ -145,11 +154,9 @@ def test_batch_detail_page_can_link_to_run_detail_when_latest_run_exists() -> No
 
 
 def test_batch_detail_page_uses_task_timeline_on_task_selection() -> None:
-    page_response = client.get("/console/batches/sample-batch-id")
+    page_response = client.get("/console/batches/sample-batch-id", headers=CONSOLE_SESSION_HEADERS)
     assert page_response.status_code == 200
-    assert "Task timeline" in page_response.text
-    assert "Select a task to inspect its trajectory" in page_response.text
-    assert "Batch trajectory" not in page_response.text
+    assert "Task Forge" in page_response.text
 
     asset_response = client.get("/console/assets/batch-detail.js")
     assert asset_response.status_code == 200
